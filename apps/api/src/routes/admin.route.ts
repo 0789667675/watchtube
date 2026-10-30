@@ -199,3 +199,48 @@ adminRouter.post('/copyright/claims/:id/resolve-escrow', async (req: Request, re
     res.status(400).json({ error: 'Invalid request' });
   }
 });
+
+adminRouter.get('/monetization/providers', async (req: Request, res: Response) => {
+  try {
+    const providers = await prisma.adProviderConfig.findMany({
+      orderBy: { priority: 'asc' }
+    });
+    res.status(200).json(providers);
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+const adProviderSchema = z.object({
+  name: z.string(),
+  vastTagUrl: z.string().url(),
+  priority: z.number().int().optional(),
+  isEnabled: z.boolean().optional(),
+  format: z.string().optional()
+});
+
+adminRouter.post('/monetization/providers', async (req: Request, res: Response) => {
+  try {
+    const data = adProviderSchema.parse(req.body);
+
+    const provider = await prisma.adProviderConfig.upsert({
+      where: { name: data.name },
+      update: data,
+      create: { ...data, priority: data.priority || 1, format: data.format || 'PRE_ROLL' }
+    });
+
+    res.status(200).json(provider);
+  } catch (error) {
+    res.status(400).json({ error: 'Invalid request' });
+  }
+});
+
+adminRouter.delete('/monetization/providers/:id', async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id;
+    await prisma.adProviderConfig.delete({ where: { id } });
+    res.status(200).json({ success: true });
+  } catch (error) {
+    res.status(400).json({ error: 'Invalid request' });
+  }
+});

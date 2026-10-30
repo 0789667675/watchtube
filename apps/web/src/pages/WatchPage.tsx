@@ -28,11 +28,11 @@ export const WatchPage: React.FC = () => {
   const toggleSubscribe = () => setIsSubscribed(!isSubscribed);
 
   return (
-    <div className="max-w-[1800px] mx-auto p-4 md:p-6 lg:flex lg:gap-6">
+    <div className="max-w-[1800px] mx-auto sm:p-4 md:p-6 lg:flex lg:gap-6">
       <div className="lg:w-[70%] xl:w-[75%]">
         <VideoPlayer src={MOCK_VIDEO.masterPlaylistUrl} videoId={MOCK_VIDEO.id} />
 
-        <h1 className="text-xl md:text-2xl font-bold font-display mt-4">{MOCK_VIDEO.title}</h1>
+        <div className="px-4 sm:px-0"><h1 className="text-xl md:text-2xl font-bold font-display mt-4">{MOCK_VIDEO.title}</h1>
 
         <div className="flex flex-col sm:flex-row sm:items-center justify-between mt-4 gap-4">
           <div className="flex items-center gap-4">
@@ -134,7 +134,7 @@ export const WatchPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="lg:w-[30%] xl:w-[25%] mt-6 lg:mt-0">
+      </div><div className="px-4 sm:px-0 lg:w-[30%] xl:w-[25%] mt-6 lg:mt-0">
         <h3 className="font-bold mb-4 font-display">Up Next</h3>
         <div className="flex flex-col gap-3">
           {[1, 2, 3, 4, 5].map((i) => (
