@@ -7,10 +7,100 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  VIEWER
+  CREATOR
+  MODERATOR
+  ADMIN
+}
+
+enum UserStatus {
+  GOOD_STANDING
+  WARNING
+  RESTRICTED
+  SUSPENDED
+}
+
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String     @id @default(uuid()) @db.Uuid
+  email        String     @unique
+  passwordHash String
+  role         Role       @default(VIEWER)
+  status       UserStatus @default(GOOD_STANDING)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  channels     Channel[]
+}
+
+model Channel {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @db.Uuid
+  user            User     @relation(fields: [userId], references: [id])
+  handle          String   @unique
+  name            String
+  description     String?
+  avatarUrl       String?
+  bannerUrl       String?
+  subscriberCount Int      @default(0)
+  isVerified      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  videos          Video[]
+  transactions    WalletTransaction[]
+}
+
+enum VideoStatus {
+  DRAFT
+  UPLOADING
+  PROCESSING
+  READY
+  REJECTED
+}
+
+enum Visibility {
+  PUBLIC
+  UNLISTED
+  PRIVATE
+}
+
+model Video {
+  id                 String       @id @default(uuid()) @db.Uuid
+  channelId          String       @db.Uuid
+  channel            Channel      @relation(fields: [channelId], references: [id])
+  title              String
+  description        String?
+  rawStorageKey      String
+  status             VideoStatus  @default(DRAFT)
+  visibility         Visibility   @default(PRIVATE)
+  duration           Float?
+  viewsCount         Int          @default(0)
+  lowBandwidthReady  Boolean      @default(false)
+  createdAt          DateTime     @default(now())
+  publishedAt        DateTime?
+  variants           VideoVariant[]
+}
+
+model VideoVariant {
+  id          String   @id @default(uuid()) @db.Uuid
+  videoId     String   @db.Uuid
+  video       Video    @relation(fields: [videoId], references: [id])
+  resolution  String
+  bitrate     Int
+  playlistUrl String
+}
+
+enum TransactionType {
+  REVENUE_CREDIT
+  PAYOUT
+  ADJUSTMENT
+}
+
+model WalletTransaction {
+  id               String          @id @default(uuid()) @db.Uuid
+  channelId        String          @db.Uuid
+  channel          Channel         @relation(fields: [channelId], references: [id])
+  transactionType  TransactionType
+  amountCents      BigInt
+  balanceAfterCents BigInt
+  referenceId      String          @unique
+  createdAt        DateTime        @default(now())
 }

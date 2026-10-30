@@ -109,9 +109,15 @@ importers:
         specifier: ^5.0.0
         version: 5.22.0(prisma@5.22.0)
     devDependencies:
+      '@watchtube/config':
+        specifier: workspace:*
+        version: link:../config
       prisma:
         specifier: ^5.0.0
         version: 5.22.0
+      typescript:
+        specifier: ^5.0.0
+        version: 5.9.3
 
   packages/types:
     devDependencies:
