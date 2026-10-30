@@ -16,7 +16,7 @@ const connection = new IORedis({
   port: parseInt(process.env.REDIS_PORT || '6379'),
   maxRetriesPerRequest: null,
 });
-const videoQueue = new Queue('videoProcessing', { connection });
+const videoQueue = new Queue('video-transcode', { connection });
 
 app.use(helmet());
 app.use(express.json());

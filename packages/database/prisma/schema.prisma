@@ -73,6 +73,7 @@ model Video {
   visibility         Visibility   @default(PRIVATE)
   duration           Float?
   viewsCount         Int          @default(0)
+  thumbnailUrl       String?
   lowBandwidthReady  Boolean      @default(false)
   createdAt          DateTime     @default(now())
   publishedAt        DateTime?
