@@ -1,8 +1,11 @@
 import express, { Request, Response } from 'express';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import { z } from 'zod';
 import { PrismaClient } from '@watchtube/database';
 import { generatePresignedUploadUrl, verifyObjectExists } from './services/storage.service';
+import { authRouter } from './routes/auth.route';
+import { channelRouter } from './routes/channel.route';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
 
@@ -20,6 +23,7 @@ const videoQueue = new Queue('video-transcode', { connection });
 
 app.use(helmet());
 app.use(express.json());
+app.use(cookieParser());
 
 // Health Check
 app.get('/health', (req: Request, res: Response) => {
@@ -125,6 +129,8 @@ apiRouter.post('/videos/:id/verify-upload', async (req: Request, res: Response) 
 });
 
 app.use('/api/v1', apiRouter);
+app.use('/api/v1/auth', authRouter);
+app.use('/api/v1/channels', channelRouter);
 
 app.listen(port, () => {
   console.log(`API server listening on port ${port}`);
