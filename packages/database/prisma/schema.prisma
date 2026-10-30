@@ -30,6 +30,11 @@ model User {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
   channels     Channel[]
+  likes        VideoLike[]
+  subscriptions Subscription[] @relation("UserSubscriptions")
+  comments     Comment[]
+  watchHistory WatchHistory[]
+  viewEvents   VideoViewEvent[]
 }
 
 model Channel {
@@ -46,6 +51,7 @@ model Channel {
   createdAt       DateTime @default(now())
   videos          Video[]
   transactions    WalletTransaction[]
+  subscribers     Subscription[] @relation("ChannelSubscribers")
 }
 
 enum VideoStatus {
@@ -78,6 +84,10 @@ model Video {
   createdAt          DateTime     @default(now())
   publishedAt        DateTime?
   variants           VideoVariant[]
+  likes              VideoLike[]
+  comments           Comment[]
+  watchHistory       WatchHistory[]
+  viewEvents         VideoViewEvent[]
 }
 
 model VideoVariant {
@@ -90,6 +100,7 @@ model VideoVariant {
 }
 
 enum TransactionType {
+  HOLD
   REVENUE_CREDIT
   PAYOUT
   ADJUSTMENT
@@ -104,4 +115,77 @@ model WalletTransaction {
   balanceAfterCents BigInt
   referenceId      String          @unique
   createdAt        DateTime        @default(now())
+  status           WalletStatus    @default(PENDING)
+}
+
+model VideoLike {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id])
+  videoId   String   @db.Uuid
+  video     Video    @relation(fields: [videoId], references: [id])
+  isDislike Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, videoId])
+}
+
+model Subscription {
+  id           String   @id @default(uuid()) @db.Uuid
+  subscriberId String   @db.Uuid
+  subscriber   User     @relation("UserSubscriptions", fields: [subscriberId], references: [id])
+  channelId    String   @db.Uuid
+  channel      Channel  @relation("ChannelSubscribers", fields: [channelId], references: [id])
+  createdAt    DateTime @default(now())
+
+  @@unique([subscriberId, channelId])
+}
+
+model Comment {
+  id         String    @id @default(uuid()) @db.Uuid
+  videoId    String    @db.Uuid
+  video      Video     @relation(fields: [videoId], references: [id])
+  userId     String    @db.Uuid
+  user       User      @relation(fields: [userId], references: [id])
+  parentId   String?   @db.Uuid
+  parent     Comment?  @relation("CommentReplies", fields: [parentId], references: [id])
+  replies    Comment[] @relation("CommentReplies")
+  content    String
+  likesCount Int       @default(0)
+  isPinned   Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+}
+
+model WatchHistory {
+  id                  String   @id @default(uuid()) @db.Uuid
+  userId              String   @db.Uuid
+  user                User     @relation(fields: [userId], references: [id])
+  videoId             String   @db.Uuid
+  video               Video    @relation(fields: [videoId], references: [id])
+  lastPositionSeconds Float
+  completed           Boolean  @default(false)
+  updatedAt           DateTime @updatedAt
+
+  @@unique([userId, videoId])
+}
+
+model VideoViewEvent {
+  id                   String   @id @default(uuid()) @db.Uuid
+  videoId              String   @db.Uuid
+  video                Video    @relation(fields: [videoId], references: [id])
+  userId               String?  @db.Uuid
+  user                 User?    @relation(fields: [userId], references: [id])
+  sessionId            String
+  watchDurationSeconds Float
+  isValidView          Boolean  @default(false)
+  ipHash               String
+  createdAt            DateTime @default(now())
+}
+
+enum WalletStatus {
+  PENDING
+  AVAILABLE
+  PAID
+  FAILED
 }

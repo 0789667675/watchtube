@@ -5,6 +5,11 @@ import { z } from 'zod';
 import { PrismaClient } from '@watchtube/database';
 import { generatePresignedUploadUrl, verifyObjectExists } from './services/storage.service';
 import { authRouter } from './routes/auth.route';
+import { interactionRouter } from './routes/interaction.route';
+import { analyticsRouter } from './routes/analytics.route';
+import { feedRouter } from './routes/feed.route';
+import { studioRouter } from './routes/studio.route';
+import { walletRouter } from './routes/wallet.route';
 import { channelRouter } from './routes/channel.route';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
@@ -131,6 +136,11 @@ apiRouter.post('/videos/:id/verify-upload', async (req: Request, res: Response) 
 app.use('/api/v1', apiRouter);
 app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/channels', channelRouter);
+app.use('/api/v1', interactionRouter);
+app.use('/api/v1/analytics', analyticsRouter);
+app.use('/api/v1/feed', feedRouter);
+app.use('/api/v1/studio', studioRouter);
+app.use('/api/v1/wallet', walletRouter);
 
 app.listen(port, () => {
   console.log(`API server listening on port ${port}`);

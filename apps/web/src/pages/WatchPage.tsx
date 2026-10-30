@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ThumbsUp, Share2, Download, BookmarkPlus, CheckCircle2 } from 'lucide-react';
+import { ThumbsUp, ThumbsDown, Share2, Download, BookmarkPlus, CheckCircle2 } from 'lucide-react';
 import { VideoPlayer } from '../components/player/VideoPlayer';
 
 // Mock data until API is wired up
@@ -22,11 +22,15 @@ const MOCK_VIDEO = {
 
 export const WatchPage: React.FC = () => {
   const [isDescExpanded, setIsDescExpanded] = useState(false);
+  const [isSubscribed, setIsSubscribed] = useState(false);
+  const [likeState, setLikeState] = useState<'NONE' | 'LIKE' | 'DISLIKE'>('NONE');
+
+  const toggleSubscribe = () => setIsSubscribed(!isSubscribed);
 
   return (
     <div className="max-w-[1800px] mx-auto p-4 md:p-6 lg:flex lg:gap-6">
       <div className="lg:w-[70%] xl:w-[75%]">
-        <VideoPlayer src={MOCK_VIDEO.masterPlaylistUrl} />
+        <VideoPlayer src={MOCK_VIDEO.masterPlaylistUrl} videoId={MOCK_VIDEO.id} />
 
         <h1 className="text-xl md:text-2xl font-bold font-display mt-4">{MOCK_VIDEO.title}</h1>
 
@@ -40,15 +44,33 @@ export const WatchPage: React.FC = () => {
               </div>
               <p className="text-xs text-gray-500 dark:text-gray-400">{MOCK_VIDEO.channel.subscribers} subscribers</p>
             </div>
-            <button className="bg-secondary-amber text-black font-bold px-4 py-2 rounded-full ml-2 hover:opacity-90 transition">
-              Subscribe
+            <button
+              onClick={toggleSubscribe}
+              className={`font-bold px-4 py-2 rounded-full ml-2 transition ${
+                isSubscribed
+                  ? 'bg-gray-200 dark:bg-gray-800 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-700'
+                  : 'bg-secondary-amber text-black hover:opacity-90'
+              }`}
+            >
+              {isSubscribed ? 'Subscribed' : 'Subscribe'}
             </button>
           </div>
 
           <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0">
-            <button className="flex items-center gap-2 bg-gray-100 dark:bg-surface-dark px-4 py-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-800 transition whitespace-nowrap">
-              <ThumbsUp className="w-4 h-4" /> 12K
-            </button>
+            <div className="flex bg-gray-100 dark:bg-surface-dark rounded-full overflow-hidden">
+              <button
+                onClick={() => setLikeState(likeState === 'LIKE' ? 'NONE' : 'LIKE')}
+                className={`flex items-center gap-2 px-4 py-2 hover:bg-gray-200 dark:hover:bg-gray-800 transition border-r border-gray-300 dark:border-gray-700 ${likeState === 'LIKE' ? 'text-brand-light dark:text-brand-dark' : ''}`}
+              >
+                <ThumbsUp className="w-4 h-4" /> 12K
+              </button>
+              <button
+                onClick={() => setLikeState(likeState === 'DISLIKE' ? 'NONE' : 'DISLIKE')}
+                className={`flex items-center gap-2 px-4 py-2 hover:bg-gray-200 dark:hover:bg-gray-800 transition ${likeState === 'DISLIKE' ? 'text-brand-light dark:text-brand-dark' : ''}`}
+              >
+                <ThumbsDown className="w-4 h-4" />
+              </button>
+            </div>
             <button className="flex items-center gap-2 bg-gray-100 dark:bg-surface-dark px-4 py-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-800 transition whitespace-nowrap">
               <Share2 className="w-4 h-4" /> Share
             </button>
@@ -66,6 +88,49 @@ export const WatchPage: React.FC = () => {
           <p className={`text-sm ${isDescExpanded ? '' : 'line-clamp-2'}`}>
             {MOCK_VIDEO.description}
           </p>
+        </div>
+
+        {/* Comments Section */}
+        <div className="mt-8">
+          <h2 className="text-xl font-bold font-display mb-4">1,432 Comments</h2>
+          <div className="flex gap-4 mb-8">
+            <div className="w-10 h-10 rounded-full bg-gray-300 dark:bg-gray-700 shrink-0" />
+            <div className="flex-1">
+              <textarea
+                className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 focus:border-brand-light dark:focus:border-brand-dark outline-none resize-none py-1"
+                placeholder="Add a comment..."
+                rows={1}
+              />
+              <div className="flex justify-end mt-2 gap-2">
+                <button className="px-4 py-2 rounded-full font-medium hover:bg-gray-100 dark:hover:bg-gray-800 transition">Cancel</button>
+                <button className="px-4 py-2 rounded-full font-bold bg-brand-light dark:bg-brand-dark text-white opacity-50 cursor-not-allowed">Comment</button>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            {[1, 2, 3].map(i => (
+              <div key={i} className="flex gap-4">
+                <div className="w-10 h-10 rounded-full bg-gray-300 dark:bg-gray-700 shrink-0" />
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-bold text-sm">@user{i}</span>
+                    <span className="text-xs text-gray-500">2 hours ago</span>
+                  </div>
+                  <p className="text-sm mb-2">This is an amazing explanation of the architecture. I really appreciate the detailed breakdown of the HLS transcoding process.</p>
+                  <div className="flex items-center gap-4">
+                    <button className="flex items-center gap-1 hover:text-brand-light transition">
+                      <ThumbsUp className="w-4 h-4" /> <span className="text-xs">45</span>
+                    </button>
+                    <button className="hover:text-brand-light transition">
+                      <ThumbsDown className="w-4 h-4" />
+                    </button>
+                    <button className="text-xs font-bold hover:bg-gray-100 dark:hover:bg-gray-800 px-3 py-1 rounded-full transition">Reply</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 

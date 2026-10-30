@@ -1,12 +1,14 @@
+import axios from 'axios';
 import React, { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import { Play, Pause, Volume2, VolumeX, Maximize, Settings, SignalLow } from 'lucide-react';
 
 interface VideoPlayerProps {
+  videoId?: string;
   src: string; // The master.m3u8 URL
 }
 
-export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src }) => {
+export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -58,6 +60,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src }) => {
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = src;
     }
+
+
+
+
 
     return () => {
       if (hlsRef.current) {
@@ -162,6 +168,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src }) => {
       }
     }
   };
+
+  // Telemetry Engine Heartbeat
+  useEffect(() => {
+    let interval: number | ReturnType<typeof setInterval>;
+
+    if (isPlaying && videoId) {
+      interval = setInterval(() => {
+        if (videoRef.current) {
+          const currentPosition = videoRef.current.currentTime;
+          const duration = videoRef.current.duration;
+          const completed = currentPosition >= duration * 0.95;
+
+          // Send beacon without blocking main thread
+          axios.post('/api/v1/analytics/telemetry', {
+            videoId,
+            sessionId: 'client-session-id', // normally generated once per app load
+            currentPosition,
+            durationWatched: 5,
+            completed
+          }).catch(console.error);
+        }
+      }, 5000);
+    }
+
+    return () => clearInterval(interval);
+  }, [isPlaying, videoId]);
+
+
 
   return (
     <div ref={containerRef} className="relative w-full aspect-video bg-black group overflow-hidden">
