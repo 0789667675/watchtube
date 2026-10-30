@@ -35,6 +35,9 @@ model User {
   comments     Comment[]
   watchHistory WatchHistory[]
   viewEvents   VideoViewEvent[]
+  reports      Report[] @relation("UserReports")
+  claims       CopyrightClaim[] @relation("UserClaims")
+  strikes      UserStrike[]
 }
 
 model Channel {
@@ -52,6 +55,8 @@ model Channel {
   videos          Video[]
   transactions    WalletTransaction[]
   subscribers     Subscription[] @relation("ChannelSubscribers")
+  isMonetized     Boolean @default(false)
+  wtppApplication WtppApplication?
 }
 
 enum VideoStatus {
@@ -88,6 +93,7 @@ model Video {
   comments           Comment[]
   watchHistory       WatchHistory[]
   viewEvents         VideoViewEvent[]
+  copyrightClaims    CopyrightClaim[]
 }
 
 model VideoVariant {
@@ -188,4 +194,98 @@ enum WalletStatus {
   AVAILABLE
   PAID
   FAILED
+}
+
+enum ReportReason {
+  SPAM
+  HARASSMENT
+  COPYRIGHT
+  HATE_SPEECH
+  MISLEADING
+  OTHER
+}
+
+enum ReportTargetType {
+  VIDEO
+  COMMENT
+  CHANNEL
+}
+
+enum ReportStatus {
+  OPEN
+  UNDER_REVIEW
+  ACTION_TAKEN
+  DISMISSED
+}
+
+model Report {
+  id          String           @id @default(uuid()) @db.Uuid
+  reporterId  String?          @db.Uuid
+  reporter    User?            @relation("UserReports", fields: [reporterId], references: [id])
+  targetType  ReportTargetType
+  targetId    String           @db.Uuid
+  reason      ReportReason
+  details     String?
+  status      ReportStatus     @default(OPEN)
+  createdAt   DateTime         @default(now())
+  resolvedAt  DateTime?
+}
+
+enum CopyrightClaimStatus {
+  OPEN
+  UNDER_REVIEW
+  APPROVED_TAKEDOWN
+  REJECTED
+  DISPUTED
+}
+
+model CopyrightClaim {
+  id          String               @id @default(uuid()) @db.Uuid
+  claimantId  String               @db.Uuid
+  claimant    User                 @relation("UserClaims", fields: [claimantId], references: [id])
+  videoId     String               @db.Uuid
+  video       Video                @relation(fields: [videoId], references: [id])
+  description String
+  proofUrl    String?
+  status      CopyrightClaimStatus @default(OPEN)
+  createdAt   DateTime             @default(now())
+  resolvedAt  DateTime?
+}
+
+enum StrikeType {
+  WARNING
+  VIDEO_REMOVAL
+  MONETIZATION_HOLD
+  SUSPENSION
+}
+
+model UserStrike {
+  id         String     @id @default(uuid()) @db.Uuid
+  userId     String     @db.Uuid
+  user       User       @relation(fields: [userId], references: [id])
+  reason     String
+  strikeType StrikeType
+  expiresAt  DateTime
+  createdAt  DateTime   @default(now())
+}
+
+enum WtppApplicationStatus {
+  NOT_APPLIED
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model WtppApplication {
+  id                   String                @id @default(uuid()) @db.Uuid
+  channelId            String                @unique @db.Uuid
+  channel              Channel               @relation(fields: [channelId], references: [id])
+  status               WtppApplicationStatus @default(PENDING)
+  channelWatchHours    Float
+  subscriberCount      Int
+  taxId                String?
+  nationalIdOrPassport String?
+  reviewerNotes        String?
+  submittedAt          DateTime              @default(now())
+  reviewedAt           DateTime?
 }

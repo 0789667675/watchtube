@@ -10,6 +10,8 @@ import { analyticsRouter } from './routes/analytics.route';
 import { feedRouter } from './routes/feed.route';
 import { studioRouter } from './routes/studio.route';
 import { walletRouter } from './routes/wallet.route';
+import { trustRouter } from './routes/trust.route';
+import { adminRouter } from './routes/admin.route';
 import { channelRouter } from './routes/channel.route';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
@@ -141,6 +143,8 @@ app.use('/api/v1/analytics', analyticsRouter);
 app.use('/api/v1/feed', feedRouter);
 app.use('/api/v1/studio', studioRouter);
 app.use('/api/v1/wallet', walletRouter);
+app.use('/api/v1', trustRouter);
+app.use('/api/v1/admin', adminRouter);
 
 app.listen(port, () => {
   console.log(`API server listening on port ${port}`);

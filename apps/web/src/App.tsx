@@ -9,6 +9,8 @@ import { LoginPage } from './pages/auth/LoginPage';
 import { RegisterPage } from './pages/auth/RegisterPage';
 import { StudioLayout } from './pages/studio/StudioLayout';
 import { ContentPage } from './pages/studio/ContentPage';
+import { MonetizationPage } from './pages/studio/MonetizationPage';
+import { AdminDashboard } from './pages/admin/AdminDashboard';
 import { DashboardPage } from './pages/studio/DashboardPage';
 
 function App() {
@@ -31,7 +33,9 @@ function App() {
         <Route path="/studio" element={<StudioLayout />}>
           <Route index element={<DashboardPage />} />
           <Route path="content" element={<ContentPage />} />
+          <Route path="monetization" element={<MonetizationPage />} />
         </Route>
+        <Route path="/admin" element={<AdminDashboard />} />
       </Routes>
     </BrowserRouter>
   );
