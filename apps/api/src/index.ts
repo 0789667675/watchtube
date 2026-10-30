@@ -129,3 +129,75 @@ app.use('/api/v1', apiRouter);
 app.listen(port, () => {
   console.log(`API server listening on port ${port}`);
 });
+
+// Public Video APIs
+apiRouter.get('/videos', async (req: Request, res: Response) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 12;
+    const category = req.query.category as string;
+
+    const skip = (page - 1) * limit;
+
+    // Example basic where clause, can be expanded to filter by category if added to DB schema
+    const whereClause: any = {
+      status: 'READY',
+      visibility: 'PUBLIC'
+    };
+
+    const videos = await prisma.video.findMany({
+      where: whereClause,
+      skip,
+      take: limit,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        channel: {
+          select: {
+            name: true,
+            handle: true,
+            avatarUrl: true,
+            isVerified: true
+          }
+        }
+      }
+    });
+
+    res.status(200).json(videos);
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+apiRouter.get('/videos/:id', async (req: Request, res: Response) => {
+  try {
+    const videoId = req.params.id;
+
+    const video = await prisma.video.findUnique({
+      where: {
+        id: videoId,
+        status: 'READY'
+      },
+      include: {
+        channel: {
+          select: {
+            name: true,
+            handle: true,
+            avatarUrl: true,
+            isVerified: true,
+            subscriberCount: true
+          }
+        },
+        variants: true
+      }
+    });
+
+    if (!video) {
+      res.status(404).json({ error: 'Video not found or not available' });
+      return;
+    }
+
+    res.status(200).json(video);
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
