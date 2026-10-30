@@ -11,6 +11,7 @@ import { StudioLayout } from './pages/studio/StudioLayout';
 import { ContentPage } from './pages/studio/ContentPage';
 import { MonetizationPage } from './pages/studio/MonetizationPage';
 import { AdminDashboard } from './pages/admin/AdminDashboard';
+import { RevenuePage } from './pages/admin/RevenuePage';
 import { DashboardPage } from './pages/studio/DashboardPage';
 
 function App() {
@@ -36,6 +37,7 @@ function App() {
           <Route path="monetization" element={<MonetizationPage />} />
         </Route>
         <Route path="/admin" element={<AdminDashboard />} />
+          <Route path="/admin/revenue" element={<RevenuePage />} />
       </Routes>
     </BrowserRouter>
   );

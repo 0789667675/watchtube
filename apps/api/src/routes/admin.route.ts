@@ -143,3 +143,59 @@ adminRouter.patch('/copyright/claims/:id', async (req: Request, res: Response) =
 });
 
 export { adminRouter };
+
+const resolveEscrowSchema = z.object({
+  decision: z.enum(['RELEASE_TO_CREATOR', 'TRANSFER_TO_CLAIMANT'])
+});
+
+adminRouter.post('/copyright/claims/:id/resolve-escrow', async (req: Request, res: Response) => {
+  try {
+    const claimId = req.params.id;
+    const { decision } = resolveEscrowSchema.parse(req.body);
+
+    const escrow = await prisma.escrowHold.findUnique({
+      where: { claimId },
+      include: { claim: true, video: { include: { channel: true } } }
+    });
+
+    if (!escrow || escrow.status !== 'HELD') {
+      return res.status(400).json({ error: 'No active escrow hold found for this claim' });
+    }
+
+    if (decision === 'RELEASE_TO_CREATOR') {
+      await prisma.$transaction(async (tx) => {
+        const lastTx = await tx.walletTransaction.findFirst({
+          where: { channelId: escrow.video.channelId },
+          orderBy: { createdAt: 'desc' }
+        });
+        const currentBalance = lastTx ? Number(lastTx.balanceAfterCents) : 0;
+        const amount = Number(escrow.heldAmountCents);
+
+        await tx.walletTransaction.create({
+          data: {
+            channelId: escrow.video.channelId,
+            transactionType: 'REVENUE_CREDIT',
+            amountCents: BigInt(amount),
+            balanceAfterCents: BigInt(currentBalance + amount),
+            referenceId: `escrow-release-${escrow.id}`,
+            status: 'AVAILABLE'
+          }
+        });
+
+        await tx.escrowHold.update({
+          where: { id: escrow.id },
+          data: { status: 'RELEASED_TO_CREATOR', resolvedAt: new Date() }
+        });
+      });
+    } else {
+      await prisma.escrowHold.update({
+        where: { id: escrow.id },
+        data: { status: 'TRANSFERRED_TO_CLAIMANT', resolvedAt: new Date() }
+      });
+    }
+
+    res.status(200).json({ success: true, decision });
+  } catch (error) {
+    res.status(400).json({ error: 'Invalid request' });
+  }
+});

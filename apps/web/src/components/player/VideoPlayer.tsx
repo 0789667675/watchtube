@@ -24,6 +24,69 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
   const [currentRes, setCurrentRes] = useState<number>(-1); // -1 is Auto
   const [levels, setLevels] = useState<{height: number; index: number}[]>([]);
 
+  const [showAd, setShowAd] = useState(false);
+  const [adTimeLeft, setAdTimeLeft] = useState(5);
+
+  useEffect(() => {
+    // Simulated VAST Ad Request
+    const checkMonetization = async () => {
+        if (!videoId) return;
+        try {
+            const res = await axios.get('/api/v1/monetization/config');
+            if (res.data.enabled) {
+                // mock pre-roll trigger
+                setShowAd(true);
+                axios.post('/api/v1/monetization/ad-event', {
+                    videoId, eventType: 'AD_REQUEST', provider: 'GOOGLE_IMA', sessionId: 'client-session-id'
+                }).catch(() => {});
+                axios.post('/api/v1/monetization/ad-event', {
+                    videoId, eventType: 'AD_SERVED', provider: 'GOOGLE_IMA', sessionId: 'client-session-id'
+                }).catch(() => {});
+            }
+        } catch (e) {}
+    };
+    checkMonetization();
+  }, [videoId]);
+
+  useEffect(() => {
+      let timer: number | ReturnType<typeof setInterval>;
+      if (showAd && adTimeLeft > 0) {
+          timer = setInterval(() => {
+              setAdTimeLeft(prev => prev - 1);
+          }, 1000);
+      } else if (showAd && adTimeLeft === 0) {
+          axios.post('/api/v1/monetization/ad-event', {
+              videoId, eventType: 'AD_VIEWABLE', provider: 'GOOGLE_IMA', sessionId: 'client-session-id'
+          }).catch(() => {});
+      }
+      return () => clearInterval(timer);
+  }, [showAd, adTimeLeft, videoId]);
+
+  const skipAd = () => {
+      setShowAd(false);
+      togglePlay();
+  };
+
+  const adOverlayRender = showAd ? (
+      <div className="absolute inset-0 z-50 bg-black flex flex-col items-center justify-center text-white">
+          <div className="text-xl font-bold font-display mb-4">Advertisement</div>
+          <div className="text-sm text-gray-400 mb-8">Video will resume shortly...</div>
+
+          <div className="absolute bottom-16 right-4 flex gap-4">
+              <div className="bg-gray-800/80 px-4 py-2 rounded">
+                  Ad · {adTimeLeft > 0 ? adTimeLeft : 0}:05
+              </div>
+              {adTimeLeft === 0 && (
+                  <button onClick={skipAd} className="bg-brand-light dark:bg-brand-dark px-4 py-2 rounded font-bold hover:opacity-90">
+                      Skip Ad
+                  </button>
+              )}
+          </div>
+      </div>
+  ) : null;
+
+
+
   const formatTime = (time: number) => {
     if (isNaN(time)) return '00:00';
     const min = Math.floor(time / 60).toString().padStart(2, '0');
@@ -208,6 +271,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
         onEnded={() => setIsPlaying(false)}
         muted={isMuted}
       />
+      {adOverlayRender}
+
 
       <div className={`absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/80 to-transparent transition-opacity duration-300 ${showControls || !isPlaying ? 'opacity-100' : 'opacity-0'}`}>
         <div className="w-full mb-4">

@@ -12,6 +12,7 @@ import { studioRouter } from './routes/studio.route';
 import { walletRouter } from './routes/wallet.route';
 import { trustRouter } from './routes/trust.route';
 import { adminRouter } from './routes/admin.route';
+import { monetizationRouter } from './routes/monetization.route';
 import { channelRouter } from './routes/channel.route';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
@@ -145,6 +146,8 @@ app.use('/api/v1/studio', studioRouter);
 app.use('/api/v1/wallet', walletRouter);
 app.use('/api/v1', trustRouter);
 app.use('/api/v1/admin', adminRouter);
+app.use('/api/v1/monetization', monetizationRouter);
+app.use('/api/v1/admin/monetization', monetizationRouter);
 
 app.listen(port, () => {
   console.log(`API server listening on port ${port}`);

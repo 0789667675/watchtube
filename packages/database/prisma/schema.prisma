@@ -54,6 +54,7 @@ model Channel {
   createdAt       DateTime @default(now())
   videos          Video[]
   transactions    WalletTransaction[]
+  adEvents        AdEvent[]
   subscribers     Subscription[] @relation("ChannelSubscribers")
   isMonetized     Boolean @default(false)
   wtppApplication WtppApplication?
@@ -93,6 +94,8 @@ model Video {
   comments           Comment[]
   watchHistory       WatchHistory[]
   viewEvents         VideoViewEvent[]
+  adEvents           AdEvent[]
+  escrowHolds        EscrowHold[]
   copyrightClaims    CopyrightClaim[]
 }
 
@@ -250,6 +253,7 @@ model CopyrightClaim {
   status      CopyrightClaimStatus @default(OPEN)
   createdAt   DateTime             @default(now())
   resolvedAt  DateTime?
+  escrowHold  EscrowHold?
 }
 
 enum StrikeType {
@@ -288,4 +292,62 @@ model WtppApplication {
   reviewerNotes        String?
   submittedAt          DateTime              @default(now())
   reviewedAt           DateTime?
+}
+
+
+enum AdEventType {
+  AD_REQUEST
+  AD_SERVED
+  AD_VIEWABLE
+  AD_CLICK
+}
+
+model AdEvent {
+  id                String      @id @default(uuid()) @db.Uuid
+  videoId           String      @db.Uuid
+  video             Video       @relation(fields: [videoId], references: [id])
+  channelId         String      @db.Uuid
+  channel           Channel     @relation(fields: [channelId], references: [id])
+  eventType         AdEventType
+  provider          String
+  grossRevenueCents BigInt      @default(0)
+  ipHash            String
+  createdAt         DateTime    @default(now())
+}
+
+enum ReconStatus {
+  ESTIMATED
+  REPORTED
+  FINALIZED
+  DISTRIBUTED
+}
+
+model RevenueReconciliation {
+  id                        String      @id @default(uuid()) @db.Uuid
+  monthYear                 String
+  grossProviderRevenueCents BigInt
+  platformShareCents        BigInt
+  creatorPoolCents          BigInt
+  status                    ReconStatus @default(ESTIMATED)
+  finalizedAt               DateTime?
+  createdAt                 DateTime    @default(now())
+}
+
+enum EscrowStatus {
+  HELD
+  RELEASED_TO_CREATOR
+  TRANSFERRED_TO_CLAIMANT
+  REFUNDED
+}
+
+model EscrowHold {
+  id              String         @id @default(uuid()) @db.Uuid
+  videoId         String         @db.Uuid
+  video           Video          @relation(fields: [videoId], references: [id])
+  claimId         String         @unique @db.Uuid
+  claim           CopyrightClaim @relation(fields: [claimId], references: [id])
+  heldAmountCents BigInt         @default(0)
+  status          EscrowStatus   @default(HELD)
+  createdAt       DateTime       @default(now())
+  resolvedAt      DateTime?
 }
