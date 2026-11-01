@@ -5,6 +5,7 @@
   "description": "WatchTube Monorepo",
   "scripts": {
     "build": "turbo run build",
+    "build:api": "pnpm --filter @watchtube/database db:generate && pnpm --filter @watchtube/database build && pnpm --filter @watchtube/api build",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
     "test": "turbo run test"

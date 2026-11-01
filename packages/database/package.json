@@ -2,11 +2,11 @@
   "name": "@watchtube/database",
   "version": "1.0.0",
   "private": true,
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "scripts": {
     "db:generate": "prisma generate",
-    "build": "prisma generate && tsc"
+    "build": "tsc"
   },
   "dependencies": {
     "@prisma/client": "^5.0.0"
