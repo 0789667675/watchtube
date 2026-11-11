@@ -42,14 +42,14 @@ export const WatchPage: React.FC = () => {
                 <span className="font-bold">{MOCK_VIDEO.channel.name}</span>
                 {MOCK_VIDEO.channel.isVerified && <CheckCircle2 className="w-4 h-4 text-brand-light dark:text-brand-dark" />}
               </div>
-              <p className="text-xs text-gray-500 dark:text-gray-400">{MOCK_VIDEO.channel.subscribers} subscribers</p>
+              <p className="text-xs text-text-muted">{MOCK_VIDEO.channel.subscribers} subscribers</p>
             </div>
             <button
               onClick={toggleSubscribe}
               className={`font-bold px-4 py-2 rounded-full ml-2 transition ${
                 isSubscribed
-                  ? 'bg-gray-200 dark:bg-gray-800 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-700'
-                  : 'bg-secondary-amber text-black hover:opacity-90'
+                  ? 'bg-surface-subtle text-text-primary hover:bg-surface-hover'
+                  : 'bg-brand-action text-brand-foreground hover:bg-brand-action-hover'
               }`}
             >
               {isSubscribed ? 'Subscribed' : 'Subscribe'}
@@ -57,33 +57,33 @@ export const WatchPage: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0">
-            <div className="flex bg-gray-100 dark:bg-surface-dark rounded-full overflow-hidden">
+            <div className="flex overflow-hidden rounded-full bg-surface-subtle">
               <button
                 onClick={() => setLikeState(likeState === 'LIKE' ? 'NONE' : 'LIKE')}
-                className={`flex items-center gap-2 px-4 py-2 hover:bg-gray-200 dark:hover:bg-gray-800 transition border-r border-gray-300 dark:border-gray-700 ${likeState === 'LIKE' ? 'text-brand-light dark:text-brand-dark' : ''}`}
+                className={`flex items-center gap-2 border-r border-divider px-4 py-2 transition hover:bg-surface-hover ${likeState === 'LIKE' ? 'text-brand-light dark:text-brand-dark' : ''}`}
               >
                 <ThumbsUp className="w-4 h-4" /> 12K
               </button>
               <button
                 onClick={() => setLikeState(likeState === 'DISLIKE' ? 'NONE' : 'DISLIKE')}
-                className={`flex items-center gap-2 px-4 py-2 hover:bg-gray-200 dark:hover:bg-gray-800 transition ${likeState === 'DISLIKE' ? 'text-brand-light dark:text-brand-dark' : ''}`}
+                className={`flex items-center gap-2 px-4 py-2 transition hover:bg-surface-hover ${likeState === 'DISLIKE' ? 'text-brand-light dark:text-brand-dark' : ''}`}
               >
                 <ThumbsDown className="w-4 h-4" />
               </button>
             </div>
-            <button className="flex items-center gap-2 bg-gray-100 dark:bg-surface-dark px-4 py-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-800 transition whitespace-nowrap">
+            <button className="flex items-center gap-2 whitespace-nowrap rounded-full bg-surface-subtle px-4 py-2 transition hover:bg-surface-hover">
               <Share2 className="w-4 h-4" /> Share
             </button>
-            <button className="flex items-center gap-2 bg-gray-100 dark:bg-surface-dark px-4 py-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-800 transition whitespace-nowrap">
+            <button className="flex items-center gap-2 whitespace-nowrap rounded-full bg-surface-subtle px-4 py-2 transition hover:bg-surface-hover">
               <Download className="w-4 h-4" /> Download
             </button>
-            <button className="flex items-center gap-2 bg-gray-100 dark:bg-surface-dark p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-800 transition">
+            <button className="flex items-center gap-2 rounded-full bg-surface-subtle p-2 transition hover:bg-surface-hover">
               <BookmarkPlus className="w-5 h-5" />
             </button>
           </div>
         </div>
 
-        <div className="mt-4 bg-gray-100 dark:bg-surface-dark p-4 rounded-xl cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-800 transition" onClick={() => setIsDescExpanded(!isDescExpanded)}>
+        <div className="mt-4 cursor-pointer rounded-card bg-surface-subtle p-4 transition hover:bg-surface-hover" onClick={() => setIsDescExpanded(!isDescExpanded)}>
           <p className="font-bold text-sm mb-1">{MOCK_VIDEO.views} views • {MOCK_VIDEO.date}</p>
           <p className={`text-sm ${isDescExpanded ? '' : 'line-clamp-2'}`}>
             {MOCK_VIDEO.description}
@@ -94,16 +94,16 @@ export const WatchPage: React.FC = () => {
         <div className="mt-8">
           <h2 className="text-xl font-bold font-display mb-4">1,432 Comments</h2>
           <div className="flex gap-4 mb-8">
-            <div className="w-10 h-10 rounded-full bg-gray-300 dark:bg-gray-700 shrink-0" />
+            <div className="h-10 w-10 shrink-0 rounded-full bg-surface-subtle" />
             <div className="flex-1">
               <textarea
-                className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 focus:border-brand-light dark:focus:border-brand-dark outline-none resize-none py-1"
+                className="w-full resize-none border-b border-divider bg-transparent py-1 focus:border-brand-primary focus:outline-none"
                 placeholder="Add a comment..."
                 rows={1}
               />
               <div className="flex justify-end mt-2 gap-2">
-                <button className="px-4 py-2 rounded-full font-medium hover:bg-gray-100 dark:hover:bg-gray-800 transition">Cancel</button>
-                <button className="px-4 py-2 rounded-full font-bold bg-brand-light dark:bg-brand-dark text-white opacity-50 cursor-not-allowed">Comment</button>
+                <button className="rounded-full px-4 py-2 font-medium transition hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">Cancel</button>
+                <button className="cursor-not-allowed rounded-full bg-brand-action px-4 py-2 font-bold text-brand-foreground opacity-50">Comment</button>
               </div>
             </div>
           </div>
@@ -111,11 +111,11 @@ export const WatchPage: React.FC = () => {
           <div className="space-y-6">
             {[1, 2, 3].map(i => (
               <div key={i} className="flex gap-4">
-                <div className="w-10 h-10 rounded-full bg-gray-300 dark:bg-gray-700 shrink-0" />
+                <div className="h-10 w-10 shrink-0 rounded-full bg-surface-subtle" />
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <span className="font-bold text-sm">@user{i}</span>
-                    <span className="text-xs text-gray-500">2 hours ago</span>
+                    <span className="text-xs text-text-muted">2 hours ago</span>
                   </div>
                   <p className="text-sm mb-2">This is an amazing explanation of the architecture. I really appreciate the detailed breakdown of the HLS transcoding process.</p>
                   <div className="flex items-center gap-4">
@@ -125,7 +125,7 @@ export const WatchPage: React.FC = () => {
                     <button className="hover:text-brand-light transition">
                       <ThumbsDown className="w-4 h-4" />
                     </button>
-                    <button className="text-xs font-bold hover:bg-gray-100 dark:hover:bg-gray-800 px-3 py-1 rounded-full transition">Reply</button>
+                    <button className="rounded-full px-3 py-1 text-xs font-bold transition hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">Reply</button>
                   </div>
                 </div>
               </div>
@@ -145,8 +145,8 @@ export const WatchPage: React.FC = () => {
               </div>
               <div className="flex flex-col py-1">
                 <h4 className="text-sm font-bold line-clamp-2 leading-tight group-hover:text-brand-light dark:group-hover:text-brand-dark transition">{MOCK_VIDEO.title}</h4>
-                <span className="text-xs text-gray-500 mt-1">{MOCK_VIDEO.channel.name}</span>
-                <span className="text-xs text-gray-500">{MOCK_VIDEO.views} views • {MOCK_VIDEO.date}</span>
+                <span className="mt-1 text-xs text-text-muted">{MOCK_VIDEO.channel.name}</span>
+                <span className="text-xs text-text-muted">{MOCK_VIDEO.views} views • {MOCK_VIDEO.date}</span>
               </div>
             </div>
           ))}

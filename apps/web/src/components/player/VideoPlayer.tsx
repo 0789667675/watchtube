@@ -77,7 +77,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
                   Ad · {adTimeLeft > 0 ? adTimeLeft : 0}:05
               </div>
               {adTimeLeft === 0 && (
-                  <button onClick={skipAd} className="bg-brand-light dark:bg-brand-dark px-4 py-2 rounded font-bold hover:opacity-90">
+                  <button onClick={skipAd} className="rounded-control bg-brand-action px-4 py-2 font-bold text-brand-foreground transition hover:bg-brand-action-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
                       Skip Ad
                   </button>
               )}
@@ -302,7 +302,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
           <div className="flex items-center gap-4 relative">
             <button
                 onClick={toggleLowBandwidth}
-                className={`flex items-center gap-1 text-xs px-2 py-1 rounded transition ${isLowBandwidth ? 'bg-secondary-amber text-black' : 'bg-gray-800 text-white hover:bg-gray-700'}`}
+                className={`flex items-center gap-1 rounded-control px-2 py-1 text-xs transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus ${isLowBandwidth ? 'bg-status-warning text-status-warning-foreground' : 'bg-surface-subtle text-text-primary hover:bg-surface-hover'}`}
                 title="Low-Bandwidth Mode (360p)"
             >
                 <SignalLow className="w-4 h-4" />

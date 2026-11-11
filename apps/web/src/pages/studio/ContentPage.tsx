@@ -14,14 +14,14 @@ export const ContentPage: React.FC = () => {
     <div>
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-bold font-display">Channel content</h1>
-        <button onClick={() => setIsUploadOpen(true)} className="bg-secondary-amber text-black font-bold px-4 py-2 rounded-lg hover:opacity-90">
+        <button onClick={() => setIsUploadOpen(true)} className="rounded-control bg-brand-action px-4 py-2 font-bold text-brand-foreground transition hover:bg-brand-action-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
           Upload Video
         </button>
       </div>
 
       <div className="w-full overflow-x-auto border border-border-light dark:border-border-dark rounded-xl">
         <table className="w-full text-left text-sm">
-          <thead className="bg-gray-50 dark:bg-gray-800/50 border-b border-border-light dark:border-border-dark">
+          <thead className="border-b border-divider bg-surface-subtle">
             <tr>
               <th className="p-4 font-medium">Video</th>
               <th className="p-4 font-medium">Visibility</th>
@@ -32,9 +32,9 @@ export const ContentPage: React.FC = () => {
           </thead>
           <tbody className="divide-y divide-border-light dark:divide-border-dark">
             {MOCK_CONTENT.map(video => (
-              <tr key={video.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+              <tr key={video.id} className="transition-colors hover:bg-surface-hover">
                 <td className="p-4 flex items-center gap-3">
-                  <div className="w-24 aspect-video bg-gray-200 dark:bg-gray-700 rounded" />
+                  <div className="aspect-video w-24 rounded-control bg-surface-subtle" />
                   <span className="font-medium line-clamp-2">{video.title}</span>
                 </td>
                 <td className="p-4">{video.visibility}</td>

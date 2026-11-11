@@ -7,7 +7,7 @@ import { authenticate, AuthRequest } from '../middleware/auth';
 
 const prisma = new PrismaClient();
 const authRouter = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
+import { JWT_SECRET } from '../config/jwt';
 
 const registerSchema = z.object({
   email: z.string().email(),

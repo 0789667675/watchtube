@@ -1,11 +1,20 @@
 import React from 'react';
+import { useTheme } from '../theme/useTheme';
 
 export const ApertureLogo: React.FC<{ className?: string }> = ({ className }) => (
-  <div className={`flex items-center gap-2 ${className || ''}`}>
-    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M16 2L4 8V24L16 30L28 24V8L16 2Z" fill="currentColor" className="text-brand-light dark:text-brand-dark" />
-      <circle cx="16" cy="16" r="6" fill="currentColor" className="text-secondary-amber" />
-    </svg>
-    <span className="font-display font-bold text-xl tracking-tight">WatchTube</span>
+  <div className={`flex items-center ${className || ''}`}>
+    <ThemedWordmark />
   </div>
 );
+
+function ThemedWordmark() {
+  const { theme } = useTheme();
+
+  return (
+    <img
+      src={`/brand/watchtube-wordmark-${theme}.png`}
+      alt="WatchTube: Watch, Create, Share"
+      className="h-8 w-auto sm:h-10"
+    />
+  );
+}

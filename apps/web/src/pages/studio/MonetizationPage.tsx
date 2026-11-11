@@ -1,17 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { DollarSign, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { isStudioMonetizationStatus } from './studioApi';
+import type { StudioMonetizationStatus } from './studioApi';
 
 export const MonetizationPage: React.FC = () => {
-  const [status, setStatus] = useState<any>(null);
+  const [status, setStatus] = useState<StudioMonetizationStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isApplying, setIsApplying] = useState(false);
 
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        const response = await axios.get('/api/v1/wtpp/status');
-        setStatus(response.data);
+        const response = await axios.get<unknown>('/api/v1/wtpp/status');
+        if (isStudioMonetizationStatus(response.data)) {
+          setStatus(response.data);
+        } else {
+          console.error('Monetization status response did not match the expected format.');
+          setStatus(null);
+        }
       } catch (e) {
         console.error(e);
       } finally {
@@ -25,8 +32,9 @@ export const MonetizationPage: React.FC = () => {
     setIsApplying(true);
     try {
       await axios.post('/api/v1/wtpp/apply', {});
-      setStatus({ ...status, applicationStatus: 'PENDING' });
+      setStatus(current => current ? { ...current, applicationStatus: 'PENDING' } : current);
     } catch (error) {
+      console.error('Failed to submit monetization application:', error);
       alert('Failed to submit application');
     } finally {
       setIsApplying(false);
@@ -34,7 +42,7 @@ export const MonetizationPage: React.FC = () => {
   };
 
   if (isLoading) return <div className="p-6">Loading monetization status...</div>;
-  if (!status) return <div className="p-6">Error loading data.</div>;
+  if (!status) return <div className="p-6 text-text-muted" role="alert">Monetization status is unavailable. Check the API connection and try again.</div>;
 
   const subPercent = Math.min((status.subscriberCount / 1000) * 100, 100);
   const hoursPercent = Math.min((status.totalWatchHours / 4000) * 100, 100);
@@ -43,7 +51,7 @@ export const MonetizationPage: React.FC = () => {
     <div className="max-w-4xl mx-auto p-4 md:p-6 space-y-8">
       <div>
         <h1 className="text-2xl font-bold font-display mb-2">WatchTube Partner Program</h1>
-        <p className="text-gray-500">Join the WTPP to monetize your content and get access to creator support.</p>
+        <p className="text-text-muted">Join the WTPP to monetize your content and get access to creator support.</p>
       </div>
 
       {status.isMonetized ? (
@@ -64,20 +72,20 @@ export const MonetizationPage: React.FC = () => {
             <div>
               <div className="flex justify-between text-sm font-medium mb-2">
                 <span>{status.subscriberCount} Subscribers</span>
-                <span className="text-gray-500">1,000 required</span>
+                <span className="text-text-muted">1,000 required</span>
               </div>
-              <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                <div className="bg-brand-light dark:bg-brand-dark h-2 rounded-full" style={{ width: `${subPercent}%` }} />
+              <div className="h-2 w-full rounded-full bg-surface-subtle">
+                <div className="bg-brand-primary h-2 rounded-full" style={{ width: `${subPercent}%` }} />
               </div>
             </div>
 
             <div>
               <div className="flex justify-between text-sm font-medium mb-2">
                 <span>{status.totalWatchHours.toFixed(1)} Watch Hours</span>
-                <span className="text-gray-500">4,000 required</span>
+                <span className="text-text-muted">4,000 required</span>
               </div>
-              <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                <div className="bg-brand-light dark:bg-brand-dark h-2 rounded-full" style={{ width: `${hoursPercent}%` }} />
+              <div className="h-2 w-full rounded-full bg-surface-subtle">
+                <div className="bg-brand-primary h-2 rounded-full" style={{ width: `${hoursPercent}%` }} />
               </div>
             </div>
 
@@ -95,7 +103,7 @@ export const MonetizationPage: React.FC = () => {
 
           <div className="border-t border-border-light dark:border-border-dark pt-6">
             {status.applicationStatus === 'PENDING' && (
-              <button disabled className="bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-400 font-bold px-6 py-2 rounded-full">
+              <button disabled className="rounded-full bg-surface-subtle px-6 py-2 font-bold text-text-muted">
                 Application Pending Review
               </button>
             )}
@@ -108,7 +116,7 @@ export const MonetizationPage: React.FC = () => {
               <button
                 onClick={handleApply}
                 disabled={!status.isEligible || isApplying}
-                className="bg-brand-light dark:bg-brand-dark text-white font-bold px-6 py-2 rounded-full disabled:opacity-50 hover:opacity-90 transition"
+                className="rounded-full bg-brand-action px-6 py-2 font-bold text-brand-foreground transition hover:bg-brand-action-hover disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
               >
                 {isApplying ? 'Submitting...' : 'Apply Now'}
               </button>

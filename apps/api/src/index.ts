@@ -16,17 +16,20 @@ import { monetizationRouter } from './routes/monetization.route';
 import { channelRouter } from './routes/channel.route';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
+import { JWT_SECRET } from './config/jwt';
 
 const app = express();
 const port = process.env.PORT || 3001;
 const prisma = new PrismaClient();
 
 // Setup Redis & BullMQ
-const connection = new IORedis({
-  host: process.env.REDIS_HOST || '127.0.0.1',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-  maxRetriesPerRequest: null,
-});
+const connection = process.env.REDIS_URL
+  ? new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null })
+  : new IORedis({
+      host: process.env.REDIS_HOST || '127.0.0.1',
+      port: parseInt(process.env.REDIS_PORT || '6379', 10),
+      maxRetriesPerRequest: null,
+    });
 const videoQueue = new Queue('video-transcode', { connection });
 
 app.use(helmet());

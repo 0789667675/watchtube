@@ -32,8 +32,8 @@ export const HomePage: React.FC = () => {
               onClick={() => setActiveCategory(cat)}
               className={`px-3 py-1.5 rounded-lg text-sm font-medium transition whitespace-nowrap ${
                 activeCategory === cat
-                  ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-surface-dark dark:text-gray-300 dark:hover:bg-gray-800'
+                  ? 'bg-brand-action text-brand-foreground hover:bg-brand-action-hover'
+                  : 'bg-surface-subtle text-text-primary hover:bg-surface-hover'
               }`}
             >
               {cat}

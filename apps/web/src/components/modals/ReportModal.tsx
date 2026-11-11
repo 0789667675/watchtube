@@ -44,7 +44,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ isOpen, onClose, targe
       <div className="w-full max-w-md bg-surface-light dark:bg-surface-dark p-6 rounded-2xl shadow-xl">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-bold font-display">Report Content</h2>
-          <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full"><X className="w-5 h-5" /></button>
+          <button onClick={onClose} className="rounded-full p-1 transition hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"><X className="w-5 h-5" /></button>
         </div>
 
         {isSuccess ? (
@@ -55,7 +55,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ isOpen, onClose, targe
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium mb-2">Reason</label>
-              <select value={reason} onChange={(e) => setReason(e.target.value)} className="w-full rounded-lg border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-obsidian px-4 py-2 focus:ring-brand-light focus:outline-none">
+              <select value={reason} onChange={(e) => setReason(e.target.value)} className="w-full rounded-control border border-border-light bg-canvas-light px-4 py-2 text-text-primary focus:outline-none focus:ring-2 focus:ring-focus dark:border-border-dark dark:bg-canvas-obsidian">
                 <option value="SPAM">Spam or misleading</option>
                 <option value="HARASSMENT">Harassment or bullying</option>
                 <option value="HATE_SPEECH">Hate speech</option>
@@ -70,13 +70,13 @@ export const ReportModal: React.FC<ReportModalProps> = ({ isOpen, onClose, targe
                 value={details}
                 onChange={(e) => setDetails(e.target.value)}
                 rows={4}
-                className="w-full rounded-lg border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-obsidian px-4 py-2 focus:ring-brand-light focus:outline-none"
+                className="w-full rounded-control border border-border-light bg-canvas-light px-4 py-2 text-text-primary focus:outline-none focus:ring-2 focus:ring-focus dark:border-border-dark dark:bg-canvas-obsidian"
                 placeholder="Provide any additional context..."
               />
             </div>
 
             <div className="flex justify-end gap-3 mt-6">
-              <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 dark:hover:bg-gray-800">Cancel</button>
+              <button type="button" onClick={onClose} className="rounded-control px-4 py-2 text-sm font-medium transition hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">Cancel</button>
               <button type="submit" disabled={isSubmitting} className="px-4 py-2 rounded-lg text-sm font-bold bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">Submit Report</button>
             </div>
           </form>

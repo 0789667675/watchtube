@@ -46,17 +46,17 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose }) => 
       <div className="w-full max-w-2xl bg-surface-light dark:bg-surface-dark rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
         <div className="flex justify-between items-center p-4 border-b border-border-light dark:border-border-dark">
           <h2 className="text-xl font-bold font-display">Upload Video</h2>
-          <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full"><X className="w-6 h-6" /></button>
+          <button onClick={onClose} className="rounded-full p-1 transition hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"><X className="w-6 h-6" /></button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-6">
           {step === 1 && (
-            <div {...getRootProps()} className={`border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition ${isDragActive ? 'border-brand-light bg-brand-light/10' : 'border-gray-300 dark:border-gray-700 hover:border-gray-400'}`}>
+            <div {...getRootProps()} className={`cursor-pointer rounded-card border-2 border-dashed p-12 text-center transition ${isDragActive ? 'border-brand-primary bg-brand-primary/10' : 'border-border hover:border-brand-primary'}`}>
               <input {...getInputProps()} />
-              <UploadCloud className="w-16 h-16 mx-auto mb-4 text-gray-400" />
+              <UploadCloud className="mx-auto mb-4 h-16 w-16 text-text-muted" />
               <p className="text-lg font-medium mb-1">Drag and drop video files to upload</p>
-              <p className="text-sm text-gray-500 mb-6">Your videos will be private until you publish them.</p>
-              <button className="bg-brand-light dark:bg-brand-dark text-white font-bold px-6 py-2 rounded-full pointer-events-none">
+              <p className="mb-6 text-sm text-text-muted">Your videos will be private until you publish them.</p>
+              <button className="pointer-events-none rounded-full bg-brand-action px-6 py-2 font-bold text-brand-foreground">
                 Select Files
               </button>
             </div>
@@ -64,16 +64,16 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose }) => 
 
           {step === 2 && (
             <form id="meta-form" onSubmit={handleSubmit(onSubmitMetadata)} className="space-y-6">
-              <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4 flex items-center gap-4">
-                <div className="w-16 h-16 bg-gray-200 dark:bg-gray-700 rounded flex items-center justify-center shrink-0">
-                  <Video className="w-8 h-8 text-gray-400" />
+              <div className="flex items-center gap-4 rounded-card bg-surface-subtle p-4">
+                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-control bg-surface-hover">
+                  <Video className="h-8 w-8 text-text-muted" />
                 </div>
                 <div className="flex-1">
                   <p className="font-medium truncate mb-1">{file?.name}</p>
-                  <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                    <div className="h-full bg-brand-light dark:bg-brand-dark transition-all duration-300" style={{ width: `${progress}%` }} />
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-surface-hover">
+                    <div className="h-full bg-brand-primary transition-all duration-300" style={{ width: `${progress}%` }} />
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">Uploading: {progress}%</p>
+                  <p className="mt-1 text-xs text-text-muted">Uploading: {progress}%</p>
                 </div>
               </div>
 
@@ -114,19 +114,19 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose }) => 
                 <CheckCircle2 className="w-10 h-10 text-green-600 dark:text-green-400" />
               </div>
               <h3 className="text-xl font-bold mb-2">Processing Queued</h3>
-              <p className="text-gray-500">We are currently processing your video into different formats. It will be available shortly.</p>
+              <p className="text-text-muted">We are currently processing your video into different formats. It will be available shortly.</p>
             </div>
           )}
         </div>
 
         <div className="p-4 border-t border-border-light dark:border-border-dark flex justify-end">
           {step === 2 && (
-            <button form="meta-form" type="submit" disabled={progress < 100} className="bg-brand-light dark:bg-brand-dark text-white font-bold px-6 py-2 rounded-lg disabled:opacity-50 transition">
+            <button form="meta-form" type="submit" disabled={progress < 100} className="rounded-control bg-brand-action px-6 py-2 font-bold text-brand-foreground transition hover:bg-brand-action-hover disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
               {progress < 100 ? 'Uploading...' : 'Save & Publish'}
             </button>
           )}
           {step === 3 && (
-            <button onClick={onClose} className="bg-brand-light dark:bg-brand-dark text-white font-bold px-6 py-2 rounded-lg">
+            <button onClick={onClose} className="rounded-control bg-brand-action px-6 py-2 font-bold text-brand-foreground transition hover:bg-brand-action-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
               Close
             </button>
           )}

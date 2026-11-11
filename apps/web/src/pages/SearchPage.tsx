@@ -26,7 +26,7 @@ export const SearchPage: React.FC = () => {
   }, [q]);
 
   if (!q) {
-    return <div className="p-6 text-center text-gray-500">Please enter a search term.</div>;
+    return <div className="p-6 text-center text-text-muted">Please enter a search term.</div>;
   }
 
   return (
@@ -34,7 +34,7 @@ export const SearchPage: React.FC = () => {
       <h1 className="text-xl font-bold font-display mb-6">Search results for "{q}"</h1>
 
       {isLoading ? (
-        <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-4 border-brand-light dark:border-brand-dark border-t-transparent rounded-full" /></div>
+        <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-4 border-brand-primary border-t-transparent rounded-full" /></div>
       ) : videos.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-y-10 gap-x-6">
           {videos.map((video) => (
@@ -57,7 +57,7 @@ export const SearchPage: React.FC = () => {
         </div>
       ) : (
         <div className="text-center py-20">
-          <p className="text-gray-500">No results found for "{q}".</p>
+          <p className="text-text-muted">No results found for "{q}".</p>
         </div>
       )}
     </div>

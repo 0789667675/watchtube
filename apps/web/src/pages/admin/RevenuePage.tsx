@@ -64,13 +64,13 @@ export const RevenuePage: React.FC = () => {
                     <input value={grossRevenue} onChange={e => setGrossRevenue(e.target.value)} required type="number" min="0" className="w-full rounded-lg border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-obsidian px-4 py-2" />
                 </div>
 
-                <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg flex flex-col gap-2 mt-4 text-sm font-medium">
-                    <div className="flex justify-between text-gray-500"><span>Platform Share (50%)</span><span>{Number(grossRevenue) * 0.5}</span></div>
-                    <div className="flex justify-between text-gray-500 border-b border-gray-200 dark:border-gray-700 pb-2"><span>Creator Pool (50%)</span><span>{Number(grossRevenue) * 0.5}</span></div>
+                <div className="mt-4 flex flex-col gap-2 rounded-control bg-surface-subtle p-4 text-sm font-medium">
+                    <div className="flex justify-between text-text-muted"><span>Platform Share (50%)</span><span>{Number(grossRevenue) * 0.5}</span></div>
+                    <div className="flex justify-between border-b border-divider pb-2 text-text-muted"><span>Creator Pool (50%)</span><span>{Number(grossRevenue) * 0.5}</span></div>
                     <div className="flex justify-between font-bold text-base pt-1"><span>Total Gross</span><span>{grossRevenue}</span></div>
                 </div>
 
-                <button type="submit" disabled={isReconciling} className="w-full bg-brand-light dark:bg-brand-dark text-white font-bold py-2 rounded-lg mt-2 disabled:opacity-50">
+                <button type="submit" disabled={isReconciling} className="mt-2 w-full rounded-control bg-brand-action py-2 font-bold text-brand-foreground transition hover:bg-brand-action-hover disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
                     {isReconciling ? 'Executing Dispersals...' : 'Finalize & Distribute to Wallets'}
                 </button>
             </form>
@@ -79,7 +79,7 @@ export const RevenuePage: React.FC = () => {
         {/* Escrow Holds Panel */}
         <div className="bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark rounded-xl shadow-sm p-6 flex flex-col">
             <div className="flex items-center gap-3 mb-6">
-                <Scale className="w-6 h-6 text-secondary-amber" />
+                <Scale className="w-6 h-6 text-status-warning" />
                 <h2 className="text-xl font-bold">Active Copyright Escrow Holds</h2>
             </div>
 
@@ -87,7 +87,7 @@ export const RevenuePage: React.FC = () => {
                 {escrows.map(e => (
                     <div key={e.id} className="border border-border-light dark:border-border-dark rounded-lg p-4 mb-4">
                         <div className="font-bold mb-1 truncate">{e.video.title}</div>
-                        <div className="text-secondary-amber font-medium mb-4">{e.heldAmountCents} Cents Withheld</div>
+                        <div className="mb-4 font-medium text-status-warning">{e.heldAmountCents} Cents Withheld</div>
 
                         <div className="flex flex-wrap gap-2 text-sm font-bold">
                             <button onClick={() => resolveEscrow(e.id, e.claimId, 'RELEASE_TO_CREATOR')} className="flex items-center gap-1 bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 px-3 py-1.5 rounded flex-1 justify-center">
@@ -99,7 +99,7 @@ export const RevenuePage: React.FC = () => {
                         </div>
                     </div>
                 ))}
-                {escrows.length === 0 && <div className="text-gray-500 text-center py-10">No active escrow holds.</div>}
+                {escrows.length === 0 && <div className="py-10 text-center text-text-muted">No active escrow holds.</div>}
             </div>
         </div>
 

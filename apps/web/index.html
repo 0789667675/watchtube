@@ -4,7 +4,56 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>web</title>
+    <meta name="theme-color" content="#F4F7FB" />
+    <script>
+      (() => {
+        const root = document.documentElement;
+
+        try {
+          const preference = localStorage.getItem('theme');
+          const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          const theme = preference === 'dark' || (preference !== 'light' && prefersDark)
+            ? 'dark'
+            : 'light';
+
+          root.classList.toggle('dark', theme === 'dark');
+          root.dataset.theme = theme;
+          root.dataset.themePreference =
+            preference === 'dark' || preference === 'light' ? 'user' : 'system';
+          document
+            .querySelector('meta[name="theme-color"]')
+            ?.setAttribute('content', theme === 'dark' ? '#0B1220' : '#F4F7FB');
+        } catch (error) {
+          console.error('Unable to read the WatchTube theme preference.', error);
+          const theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+
+          root.classList.toggle('dark', theme === 'dark');
+          root.dataset.theme = theme;
+          root.dataset.themePreference = 'system';
+          document
+            .querySelector('meta[name="theme-color"]')
+            ?.setAttribute('content', theme === 'dark' ? '#0B1220' : '#F4F7FB');
+        }
+      })();
+    </script>
+    <style>
+      :root {
+        color-scheme: light;
+        background: #f4f7fb;
+      }
+
+      :root.dark {
+        color-scheme: dark;
+        background: #0b1220;
+      }
+
+      body {
+        min-width: 320px;
+        min-height: 100vh;
+        background: inherit;
+      }
+    </style>
+    <title>WatchTube</title>
   </head>
   <body>
     <div id="root"></div>

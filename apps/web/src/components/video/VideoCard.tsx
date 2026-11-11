@@ -37,11 +37,11 @@ export const VideoCard: React.FC<VideoCardProps> = ({ id, title, thumbnail, dura
               {title}
             </h3>
           </Link>
-          <div className="flex items-center gap-1 mt-1 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition">
+          <div className="mt-1 flex items-center gap-1 text-sm text-text-muted transition hover:text-text-primary">
             <span>{channel.name}</span>
-            {channel.isVerified && <CheckCircle2 className="w-3.5 h-3.5 text-gray-500" />}
+            {channel.isVerified && <CheckCircle2 className="h-3.5 w-3.5 text-brand-light dark:text-brand-dark" />}
           </div>
-          <span className="text-sm text-gray-600 dark:text-gray-400">
+          <span className="text-sm text-text-muted">
             {views} views • {date}
           </span>
         </div>
