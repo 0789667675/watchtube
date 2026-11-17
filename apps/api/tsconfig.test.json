@@ -1,0 +1,12 @@
+{
+  "extends": "@watchtube/config/tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist-test",
+    "rootDir": ".",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "types": ["node"]
+  },
+  "include": ["src/middleware/cors.ts", "src/routes/video-upload.route.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", "dist", "dist-test"]
+}

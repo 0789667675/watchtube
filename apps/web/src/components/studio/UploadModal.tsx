@@ -1,132 +1,291 @@
-import React, { useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import axios from 'axios';
 import { useDropzone } from 'react-dropzone';
 import { UploadCloud, X } from 'lucide-react';
 import { useForm } from 'react-hook-form';
+import { apiClient, getApiErrorMessage } from '../../api/apiClient';
+import {
+  retryUploadVerification,
+  retryVideoUpload,
+  startVideoUpload,
+  UploadWorkflowError,
+  type UploadWorkflowDependencies,
+} from '../../api/videoUploadWorkflow';
 
 interface UploadModalProps {
   isOpen: boolean;
+  channelId: string;
   onClose: () => void;
+  onUploaded: () => void;
 }
 
-export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose }) => {
-  const [step, setStep] = useState(1);
+interface UploadForm {
+  title: string;
+}
+
+type UploadPhase =
+  | 'select'
+  | 'ready'
+  | 'requesting'
+  | 'uploading'
+  | 'verifying'
+  | 'processing'
+  | 'ready-to-watch'
+  | 'rejected'
+  | 'upload-error'
+  | 'verify-error'
+  | 'request-error';
+
+const MAX_UPLOAD_SIZE = 2 * 1024 * 1024 * 1024;
+const allowedTypes = new Set(['video/mp4', 'video/webm', 'video/quicktime']);
+
+export const UploadModal: React.FC<UploadModalProps> = ({
+  isOpen,
+  channelId,
+  onClose,
+  onUploaded,
+}) => {
   const [file, setFile] = useState<File | null>(null);
+  const [phase, setPhase] = useState<UploadPhase>('select');
+  const [videoId, setVideoId] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
-  const { register, handleSubmit } = useForm();
+  const [error, setError] = useState('');
+  const { register, handleSubmit, reset } = useForm<UploadForm>();
+
+  const workflowDependencies: UploadWorkflowDependencies = {
+    requestIntent: async (metadata) => (
+      await apiClient.post('/api/v1/videos/upload-intent', metadata)
+    ).data,
+    refreshUploadUrl: async (id, metadata) => (
+      await apiClient.post<{ uploadUrl: string }>(`/api/v1/videos/${id}/upload-url`, metadata)
+    ).data.uploadUrl,
+    upload: async (url, selectedFile, onProgress) => {
+      setPhase('uploading');
+      setProgress(0);
+      await axios.put(url, selectedFile, {
+        withCredentials: false,
+        headers: { 'Content-Type': selectedFile.type },
+        onUploadProgress: (event) => {
+          if (event.total) onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+        },
+      });
+      onProgress(100);
+    },
+    verify: async (id) => {
+      setPhase('verifying');
+      await apiClient.post(`/api/v1/videos/${id}/verify-upload`);
+    },
+  };
+
+  const beginUpload = async ({ title }: UploadForm) => {
+    if (!file || !channelId) {
+      setError('Select a video and channel before uploading.');
+      return;
+    }
+    if (!allowedTypes.has(file.type) || file.size <= 0 || file.size > MAX_UPLOAD_SIZE) {
+      setError('Choose an MP4, WebM, or QuickTime video no larger than 2 GB.');
+      return;
+    }
+
+    setError('');
+    setPhase('requesting');
+    try {
+      const videoId = await startVideoUpload(
+        workflowDependencies,
+        { title: title.trim(), contentType: file.type, fileSize: file.size, channelId },
+        file,
+        setVideoId,
+        setProgress,
+      );
+      setPhase('processing');
+      onUploaded();
+      return videoId;
+    } catch (uploadError) {
+      if (uploadError instanceof UploadWorkflowError && uploadError.videoId) {
+        setVideoId(uploadError.videoId);
+      }
+      const stage = uploadError instanceof UploadWorkflowError ? uploadError.stage : 'intent';
+      const cause = uploadError instanceof UploadWorkflowError ? uploadError.originalError : uploadError;
+      const fallback = stage === 'upload'
+        ? 'Upload failed or the upload link expired. Retry to get a fresh link.'
+        : stage === 'verification'
+          ? 'The upload could not be verified. Retry verification.'
+          : 'Could not start the upload. Please try again.';
+      setError(getApiErrorMessage(cause, fallback));
+      setPhase(stage === 'upload' ? 'upload-error' : stage === 'verification' ? 'verify-error' : 'request-error');
+    }
+  };
+
+  const retryUpload = async () => {
+    if (!file || !videoId) return;
+    setError('');
+    setPhase('requesting');
+    try {
+      await retryVideoUpload(
+        workflowDependencies,
+        videoId,
+        { contentType: file.type, fileSize: file.size },
+        file,
+        setProgress,
+      );
+      setPhase('processing');
+      onUploaded();
+    } catch (retryError) {
+      const stage = retryError instanceof UploadWorkflowError ? retryError.stage : 'upload';
+      const cause = retryError instanceof UploadWorkflowError ? retryError.originalError : retryError;
+      setError(getApiErrorMessage(cause, 'Retry failed. Check your connection and try again.'));
+      setPhase(stage === 'verification' ? 'verify-error' : 'upload-error');
+    }
+  };
+
+  const retryVerification = async () => {
+    if (!videoId) return;
+    setError('');
+    try {
+      await retryUploadVerification(workflowDependencies, videoId);
+      setPhase('processing');
+      onUploaded();
+    } catch (verifyError) {
+      const cause = verifyError instanceof UploadWorkflowError ? verifyError.originalError : verifyError;
+      setError(getApiErrorMessage(cause, 'Verification is temporarily unavailable. Retry again.'));
+      setPhase('verify-error');
+    }
+  };
+
+  const refreshStatus = useCallback(async (id: string) => {
+    const response = await apiClient.get<{ status: string }>(`/api/v1/videos/${id}/upload-status`);
+    if (response.data.status === 'READY') {
+      setPhase('ready-to-watch');
+      onUploaded();
+    } else if (response.data.status === 'REJECTED') {
+      setPhase('rejected');
+      setError('Processing failed. The video was not published.');
+      onUploaded();
+    }
+  }, [onUploaded]);
+
+  useEffect(() => {
+    if (phase !== 'processing' || !videoId) return;
+    let active = true;
+    let timeout: ReturnType<typeof setTimeout>;
+
+    const poll = async () => {
+      try {
+        await refreshStatus(videoId);
+      } catch {
+        if (active) setError('Could not refresh processing status. The server status is unchanged.');
+      }
+      if (active && phase === 'processing') {
+        timeout = setTimeout(poll, 2000);
+      }
+    };
+
+    timeout = setTimeout(poll, 1500);
+    return () => {
+      active = false;
+      clearTimeout(timeout);
+    };
+  }, [phase, videoId, refreshStatus]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
-    if (acceptedFiles.length > 0) {
-      setFile(acceptedFiles[0]);
-      setStep(2); // Move to upload/metadata step
-      // Mock upload progress
-      let p = 0;
-      const interval = setInterval(() => {
-        p += 10;
-        setProgress(p);
-        if (p >= 100) clearInterval(interval);
-      }, 500);
-    }
-  }, []);
+    if (!acceptedFiles.length) return;
+    setFile(acceptedFiles[0]);
+    setPhase('ready');
+    setVideoId(null);
+    setProgress(0);
+    setError('');
+    reset({ title: acceptedFiles[0].name });
+  }, [reset]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: { 'video/mp4': ['.mp4'], 'video/webm': ['.webm'], 'video/quicktime': ['.mov'] },
-    maxSize: 2 * 1024 * 1024 * 1024 // 2GB
+    accept: {
+      'video/mp4': ['.mp4'],
+      'video/webm': ['.webm'],
+      'video/quicktime': ['.mov'],
+    },
+    maxSize: MAX_UPLOAD_SIZE,
+    multiple: false,
   });
 
-  const onSubmitMetadata = (data: any) => {
-    console.log('Metadata submitted:', data);
-    setStep(3); // Success step
-  };
-
   if (!isOpen) return null;
+
+  const isBusy = ['requesting', 'uploading', 'verifying'].includes(phase);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
       <div className="w-full max-w-2xl bg-surface-light dark:bg-surface-dark rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
         <div className="flex justify-between items-center p-4 border-b border-border-light dark:border-border-dark">
           <h2 className="text-xl font-bold font-display">Upload Video</h2>
-          <button onClick={onClose} className="rounded-full p-1 transition hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"><X className="w-6 h-6" /></button>
+          <button type="button" onClick={onClose} disabled={isBusy} aria-label="Close upload dialog" className="rounded-full p-1 transition hover:bg-surface-hover disabled:opacity-50">
+            <X className="w-6 h-6" />
+          </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6">
-          {step === 1 && (
+        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          {!file && (
             <div {...getRootProps()} className={`cursor-pointer rounded-card border-2 border-dashed p-12 text-center transition ${isDragActive ? 'border-brand-primary bg-brand-primary/10' : 'border-border hover:border-brand-primary'}`}>
               <input {...getInputProps()} />
               <UploadCloud className="mx-auto mb-4 h-16 w-16 text-text-muted" />
-              <p className="text-lg font-medium mb-1">Drag and drop video files to upload</p>
-              <p className="mb-6 text-sm text-text-muted">Your videos will be private until you publish them.</p>
-              <button className="pointer-events-none rounded-full bg-brand-action px-6 py-2 font-bold text-brand-foreground">
-                Select Files
-              </button>
+              <p className="text-lg font-medium mb-1">Drag and drop a video file</p>
+              <p className="text-sm text-text-muted">MP4, WebM, or QuickTime, up to 2 GB.</p>
             </div>
           )}
 
-          {step === 2 && (
-            <form id="meta-form" onSubmit={handleSubmit(onSubmitMetadata)} className="space-y-6">
-              <div className="flex items-center gap-4 rounded-card bg-surface-subtle p-4">
-                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-control bg-surface-hover">
-                  <Video className="h-8 w-8 text-text-muted" />
-                </div>
-                <div className="flex-1">
-                  <p className="font-medium truncate mb-1">{file?.name}</p>
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-surface-hover">
-                    <div className="h-full bg-brand-primary transition-all duration-300" style={{ width: `${progress}%` }} />
-                  </div>
-                  <p className="mt-1 text-xs text-text-muted">Uploading: {progress}%</p>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">Title (required)</label>
-                <input {...register('title', { required: true })} type="text" className="w-full rounded-lg border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-obsidian px-4 py-2 focus:ring-brand-light focus:outline-none" defaultValue={file?.name} />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">Description</label>
-                <textarea {...register('description')} rows={4} className="w-full rounded-lg border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-obsidian px-4 py-2 focus:ring-brand-light focus:outline-none" />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Category</label>
-                  <select {...register('category')} className="w-full rounded-lg border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-obsidian px-4 py-2">
-                    <option>Technology</option>
-                    <option>Music</option>
-                    <option>Education</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Visibility</label>
-                  <select {...register('visibility')} className="w-full rounded-lg border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-obsidian px-4 py-2">
-                    <option value="PUBLIC">Public</option>
-                    <option value="UNLISTED">Unlisted</option>
-                    <option value="PRIVATE">Private</option>
-                  </select>
-                </div>
-              </div>
-            </form>
-          )}
-
-          {step === 3 && (
-            <div className="text-center py-12">
-              <div className="w-20 h-20 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
-                <CheckCircle2 className="w-10 h-10 text-green-600 dark:text-green-400" />
-              </div>
-              <h3 className="text-xl font-bold mb-2">Processing Queued</h3>
-              <p className="text-text-muted">We are currently processing your video into different formats. It will be available shortly.</p>
-            </div>
+          {file && (
+            <>
+              <p className="font-medium truncate">{file.name}</p>
+              {['ready', 'requesting', 'uploading', 'upload-error', 'request-error'].includes(phase) && (
+                <form id="upload-form" onSubmit={handleSubmit(beginUpload)} className="space-y-4">
+                  <label className="block text-sm font-medium">
+                    Title
+                    <input
+                      {...register('title', { required: true, maxLength: 255 })}
+                      className="mt-1 w-full rounded-lg border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-obsidian px-4 py-2"
+                    />
+                  </label>
+                  {phase === 'uploading' && (
+                    <div aria-live="polite">
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-surface-hover">
+                        <div className="h-full bg-brand-primary transition-all" style={{ width: `${progress}%` }} />
+                      </div>
+                      <p className="mt-1 text-xs text-text-muted">Uploading: {progress}%</p>
+                    </div>
+                  )}
+                  {phase === 'upload-error' && videoId && (
+                    <button type="button" onClick={retryUpload} className="rounded-control bg-brand-action px-4 py-2 font-bold text-brand-foreground">
+                      Retry upload
+                    </button>
+                  )}
+                </form>
+              )}
+              {phase === 'verifying' && <p role="status">Verifying the uploaded file…</p>}
+              {phase === 'verify-error' && (
+                <button type="button" onClick={retryVerification} className="rounded-control bg-brand-action px-4 py-2 font-bold text-brand-foreground">
+                  Retry verification
+                </button>
+              )}
+              {phase === 'processing' && <p role="status">Processing video…</p>}
+              {phase === 'ready-to-watch' && <p role="status">Video processing completed.</p>}
+              {phase === 'rejected' && <p role="alert">Video processing failed.</p>}
+              {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+            </>
           )}
         </div>
 
-        <div className="p-4 border-t border-border-light dark:border-border-dark flex justify-end">
-          {step === 2 && (
-            <button form="meta-form" type="submit" disabled={progress < 100} className="rounded-control bg-brand-action px-6 py-2 font-bold text-brand-foreground transition hover:bg-brand-action-hover disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
-              {progress < 100 ? 'Uploading...' : 'Save & Publish'}
+        <div className="p-4 border-t border-border-light dark:border-border-dark flex justify-between">
+          {file && !isBusy && phase !== 'processing' && phase !== 'ready-to-watch' && phase !== 'rejected' && (
+            <button type="button" onClick={() => { setFile(null); setPhase('select'); setVideoId(null); setError(''); }} className="rounded-control px-4 py-2 text-sm font-medium">
+              Choose another file
             </button>
           )}
-          {step === 3 && (
-            <button onClick={onClose} className="rounded-control bg-brand-action px-6 py-2 font-bold text-brand-foreground transition hover:bg-brand-action-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
+          {['ready', 'request-error'].includes(phase) && (
+            <button form="upload-form" type="submit" disabled={isBusy} className="ml-auto rounded-control bg-brand-action px-6 py-2 font-bold text-brand-foreground disabled:opacity-50">
+              {phase === 'request-error' ? 'Retry' : 'Upload'}
+            </button>
+          )}
+          {phase === 'ready-to-watch' && (
+            <button type="button" onClick={onClose} className="ml-auto rounded-control bg-brand-action px-6 py-2 font-bold text-brand-foreground">
               Close
             </button>
           )}
@@ -135,7 +294,3 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose }) => 
     </div>
   );
 };
-
-// Temp mock for missing lucide icon in this scope
-const Video = ({ className }: { className?: string }) => <svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect width="14" height="12" x="2" y="6" rx="2" ry="2"/></svg>;
-const CheckCircle2 = ({ className }: { className?: string }) => <svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>;

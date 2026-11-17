@@ -19,6 +19,7 @@ const redisConnection = process.env.REDIS_URL
 
 // UUID validation regex (RFC 4122 standard)
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const RAW_UPLOAD_KEY_REGEX = /^uploads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Safely resolves the temporary base directory.
@@ -75,9 +76,20 @@ const worker = new Worker(
 
         console.log(`Starting job for video: ${videoId}`);
 
-        const video = await prisma.video.findUnique({ where: { id: videoId } });
+        const video = await prisma.video.findUnique({
+            where: { id: videoId },
+            include: { channel: { select: { userId: true } } },
+        });
         if (!video || video.status !== 'PROCESSING') {
             throw new Error(`Video ${videoId} is not in PROCESSING state`);
+        }
+        if (
+            typeof rawStorageKey !== 'string' ||
+            !RAW_UPLOAD_KEY_REGEX.test(rawStorageKey) ||
+            video.rawStorageKey !== rawStorageKey ||
+            !rawStorageKey.startsWith(`uploads/${video.channel.userId}/`)
+        ) {
+            throw new Error(`Raw storage key does not match the video owner for ${videoId}`);
         }
 
         // Validate public domain early to avoid starting work if URL generation cannot succeed

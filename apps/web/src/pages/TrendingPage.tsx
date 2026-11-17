@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { VideoCard } from '../components/video/VideoCard';
-import axios from 'axios';
+import { apiClient } from '../api/apiClient';
 
 export const TrendingPage: React.FC = () => {
   const [videos, setVideos] = useState<any[]>([]);
@@ -9,7 +9,7 @@ export const TrendingPage: React.FC = () => {
   useEffect(() => {
     const fetchTrending = async () => {
       try {
-        const response = await axios.get('/api/v1/feed/trending');
+        const response = await apiClient.get('/api/v1/feed/trending');
         setVideos(response.data);
       } catch (error) {
         console.error('Trending fetch failed:', error);

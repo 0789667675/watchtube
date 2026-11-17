@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import { apiClient } from '../../api/apiClient';
 import { ShieldAlert, Users, Scale } from 'lucide-react';
 import { ApertureLogo } from '../../components/brand/ApertureLogo';
 import { ThemeToggle } from '../../components/theme/ThemeToggle';
@@ -14,13 +14,13 @@ export const AdminDashboard: React.FC = () => {
     const fetchAdminData = async () => {
       try {
         if (activeTab === 'REPORTS') {
-          const res = await axios.get('/api/v1/admin/reports');
+          const res = await apiClient.get('/api/v1/admin/reports');
           setReports(res.data);
         } else if (activeTab === 'WTPP') {
-          const res = await axios.get('/api/v1/admin/wtpp/applications');
+          const res = await apiClient.get('/api/v1/admin/wtpp/applications');
           setWtpp(res.data);
         } else if (activeTab === 'COPYRIGHT') {
-          const res = await axios.get('/api/v1/admin/copyright/claims');
+          const res = await apiClient.get('/api/v1/admin/copyright/claims');
           setClaims(res.data);
         }
       } catch (error) {
@@ -31,12 +31,12 @@ export const AdminDashboard: React.FC = () => {
   }, [activeTab]);
 
   const dismissReport = async (id: string) => {
-    await axios.patch(`/api/v1/admin/reports/${id}`, { status: 'DISMISSED' });
+    await apiClient.patch(`/api/v1/admin/reports/${id}`, { status: 'DISMISSED' });
     setReports(reports.filter(r => r.id !== id));
   };
 
   const handleWTPP = async (id: string, status: 'APPROVED' | 'REJECTED') => {
-    await axios.patch(`/api/v1/admin/wtpp/applications/${id}`, { status });
+    await apiClient.patch(`/api/v1/admin/wtpp/applications/${id}`, { status });
     setWtpp(wtpp.filter(w => w.id !== id));
   };
 

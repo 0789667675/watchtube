@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import { apiClient } from '../../api/apiClient';
 import { DollarSign, Scale, CheckCircle2 } from 'lucide-react';
 
 export const RevenuePage: React.FC = () => {
@@ -20,7 +20,7 @@ export const RevenuePage: React.FC = () => {
     e.preventDefault();
     setIsReconciling(true);
     try {
-        const res = await axios.post('/api/v1/admin/monetization/reconcile', {
+        const res = await apiClient.post('/api/v1/admin/monetization/reconcile', {
             monthYear,
             grossProviderRevenueCents: Number(grossRevenue)
         });
@@ -34,7 +34,7 @@ export const RevenuePage: React.FC = () => {
 
   const resolveEscrow = async (id: string, claimId: string, decision: 'RELEASE_TO_CREATOR' | 'TRANSFER_TO_CLAIMANT') => {
       try {
-          await axios.post(`/api/v1/admin/copyright/claims/${claimId}/resolve-escrow`, { decision });
+          await apiClient.post(`/api/v1/admin/copyright/claims/${claimId}/resolve-escrow`, { decision });
           setEscrows(escrows.filter(e => e.id !== id));
       } catch (error) {
           alert('Failed to resolve escrow. It may have already been resolved.');

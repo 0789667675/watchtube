@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import { apiClient } from '../../api/apiClient';
 import { DollarSign, CheckCircle2, ShieldAlert } from 'lucide-react';
 import { isStudioMonetizationStatus } from './studioApi';
 import type { StudioMonetizationStatus } from './studioApi';
@@ -12,7 +12,7 @@ export const MonetizationPage: React.FC = () => {
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        const response = await axios.get<unknown>('/api/v1/wtpp/status');
+        const response = await apiClient.get<unknown>('/api/v1/wtpp/status');
         if (isStudioMonetizationStatus(response.data)) {
           setStatus(response.data);
         } else {
@@ -31,7 +31,7 @@ export const MonetizationPage: React.FC = () => {
   const handleApply = async () => {
     setIsApplying(true);
     try {
-      await axios.post('/api/v1/wtpp/apply', {});
+      await apiClient.post('/api/v1/wtpp/apply', {});
       setStatus(current => current ? { ...current, applicationStatus: 'PENDING' } : current);
     } catch (error) {
       console.error('Failed to submit monetization application:', error);

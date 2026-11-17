@@ -1,9 +1,8 @@
 import express, { Request, Response } from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
-import { z } from 'zod';
 import { PrismaClient } from '@watchtube/database';
-import { generatePresignedUploadUrl, verifyObjectExists } from './services/storage.service';
+import { generatePresignedUploadUrl, inspectRawObject } from './services/storage.service';
 import { authRouter } from './routes/auth.route';
 import { interactionRouter } from './routes/interaction.route';
 import { analyticsRouter } from './routes/analytics.route';
@@ -14,6 +13,9 @@ import { trustRouter } from './routes/trust.route';
 import { adminRouter } from './routes/admin.route';
 import { monetizationRouter } from './routes/monetization.route';
 import { channelRouter } from './routes/channel.route';
+import { authenticate } from './middleware/auth';
+import { createVideoUploadRouter } from './routes/video-upload.route';
+import { createCorsMiddleware, parseAllowedOrigins } from './middleware/cors';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
 import { JWT_SECRET } from './config/jwt';
@@ -32,6 +34,9 @@ const connection = process.env.REDIS_URL
     });
 const videoQueue = new Queue('video-transcode', { connection });
 
+const allowedOrigins = parseAllowedOrigins(process.env.API_ALLOWED_ORIGINS, process.env.NODE_ENV === 'production');
+app.use(createCorsMiddleware(allowedOrigins));
+
 app.use(helmet());
 app.use(express.json());
 app.use(cookieParser());
@@ -47,98 +52,56 @@ apiRouter.get('/', (req: Request, res: Response) => {
   res.status(200).json({ message: 'Welcome to WatchTube API v1' });
 });
 
-// Video Upload Intent
-const uploadIntentSchema = z.object({
-  title: z.string().min(1).max(255),
-  contentType: z.string(),
-  fileSize: z.number().positive(),
-  channelId: z.string().uuid(),
+const videoUploadRouter = createVideoUploadRouter({
+  authenticate,
+  repository: {
+    async ownsChannel(channelId, userId) {
+      return Boolean(await prisma.channel.findFirst({
+        where: { id: channelId, userId },
+        select: { id: true },
+      }));
+    },
+    async createVideo(data) {
+      return prisma.video.create({ data });
+    },
+    async findVideo(videoId) {
+      return prisma.video.findUnique({
+        where: { id: videoId },
+        include: { channel: { select: { userId: true } } },
+      });
+    },
+    async markProcessing(videoId) {
+      const result = await prisma.video.updateMany({
+        where: { id: videoId, status: 'UPLOADING' },
+        data: { status: 'PROCESSING' },
+      });
+      return result.count === 1;
+    },
+    async listVideos(userId) {
+      return prisma.video.findMany({
+        where: { channel: { userId } },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          channelId: true,
+          title: true,
+          status: true,
+          visibility: true,
+          thumbnailUrl: true,
+          viewsCount: true,
+          createdAt: true,
+        },
+      });
+    },
+  },
+  storage: {
+    createUploadUrl: generatePresignedUploadUrl,
+    inspectObject: inspectRawObject,
+  },
+  queue: videoQueue,
 });
 
-apiRouter.post('/videos/upload-intent', async (req: Request, res: Response) => {
-  try {
-    const validatedData = uploadIntentSchema.parse(req.body);
-
-    // In a real application, we would extract the userId from auth middleware
-    const mockUserId = '12345678-1234-1234-1234-123456789012';
-
-    const { uploadUrl, fileKey } = await generatePresignedUploadUrl(
-      mockUserId,
-      validatedData.contentType,
-      validatedData.fileSize
-    );
-
-    const video = await prisma.video.create({
-      data: {
-        channelId: validatedData.channelId,
-        title: validatedData.title,
-        rawStorageKey: fileKey,
-        status: 'DRAFT',
-      },
-    });
-
-    res.status(200).json({
-      videoId: video.id,
-      uploadUrl,
-      fileKey,
-    });
-  } catch (error: any) {
-    if (error instanceof z.ZodError) {
-      res.status(400).json({ error: error.errors });
-    } else {
-      res.status(400).json({ error: error.message });
-    }
-  }
-});
-
-// Verify Upload
-apiRouter.post('/videos/:id/verify-upload', async (req: Request, res: Response) => {
-  try {
-    const videoId = req.params.id;
-
-    const video = await prisma.video.findUnique({
-      where: { id: videoId },
-    });
-
-    if (!video) {
-      res.status(404).json({ error: 'Video not found' });
-      return;
-    }
-
-    if (video.status !== 'DRAFT') {
-      res.status(400).json({ error: 'Video is not in DRAFT status' });
-      return;
-    }
-
-    const exists = await verifyObjectExists(video.rawStorageKey);
-
-    if (!exists) {
-      res.status(400).json({ error: 'File not found in storage' });
-      return;
-    }
-
-    const updatedVideo = await prisma.video.update({
-      where: { id: videoId },
-      data: { status: 'PROCESSING' },
-    });
-
-    // Enqueue BullMQ job for FFmpeg worker here
-    await videoQueue.add('processVideo', {
-      videoId: updatedVideo.id,
-      rawStorageKey: updatedVideo.rawStorageKey,
-    });
-    console.log(`[Queue Stub] Enqueueing processing job for video ${videoId}`);
-
-    res.status(200).json({
-      message: 'Upload verified and processing started',
-      videoId: updatedVideo.id,
-      status: updatedVideo.status,
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
+app.use('/api/v1', videoUploadRouter);
 app.use('/api/v1', apiRouter);
 app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/channels', channelRouter);

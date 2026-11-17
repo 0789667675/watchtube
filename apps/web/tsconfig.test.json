@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023", "dom"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "rootDir": ".",
+    "outDir": "dist-test",
+    "types": ["node"]
+  },
+  "include": ["src/api/videoUploadWorkflow.ts", "tests/**/*.test.ts"],
+  "exclude": ["node_modules", "dist-test"]
+}

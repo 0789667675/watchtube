@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { VideoCard } from '../components/video/VideoCard';
-import axios from 'axios';
+import { apiClient } from '../api/apiClient';
 
 export const SearchPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -14,7 +14,7 @@ export const SearchPage: React.FC = () => {
       if (!q) return;
       setIsLoading(true);
       try {
-        const response = await axios.get(`/api/v1/feed/search?q=${encodeURIComponent(q)}`);
+        const response = await apiClient.get(`/api/v1/feed/search?q=${encodeURIComponent(q)}`);
         setVideos(response.data);
       } catch (error) {
         console.error('Search failed:', error);

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X } from 'lucide-react';
-import axios from 'axios';
+import { apiClient } from '../../api/apiClient';
 
 interface ReportModalProps {
   isOpen: boolean;
@@ -21,7 +21,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ isOpen, onClose, targe
     e.preventDefault();
     setIsSubmitting(true);
     try {
-      await axios.post('/api/v1/reports', {
+      await apiClient.post('/api/v1/reports', {
         targetType,
         targetId,
         reason,

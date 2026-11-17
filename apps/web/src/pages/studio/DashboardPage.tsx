@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { apiClient } from '../../api/apiClient';
 import { Users, Play, Clock, Wallet, ArrowUpRight } from 'lucide-react';
 import {
   isStudioAnalytics,
@@ -19,9 +20,9 @@ export const DashboardPage: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       const [analyticsResult, balanceResult, ledgerResult] = await Promise.allSettled([
-        axios.get<unknown>('/api/v1/studio/analytics'),
-        axios.get<unknown>('/api/v1/wallet/balance'),
-        axios.get<unknown>('/api/v1/wallet/ledger'),
+        apiClient.get<unknown>('/api/v1/studio/analytics'),
+        apiClient.get<unknown>('/api/v1/wallet/balance'),
+        apiClient.get<unknown>('/api/v1/wallet/ledger'),
       ]);
 
       if (analyticsResult.status === 'fulfilled') {
@@ -75,7 +76,7 @@ export const DashboardPage: React.FC = () => {
       const phone = formData.get('phone');
 
       try {
-          await axios.post('/api/v1/wallet/request-payout', {
+          await apiClient.post('/api/v1/wallet/request-payout', {
               amountCents: amount,
               provider,
               phoneNumber: phone

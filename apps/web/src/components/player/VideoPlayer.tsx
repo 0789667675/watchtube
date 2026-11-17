@@ -1,4 +1,4 @@
-import axios from 'axios';
+import { apiClient } from '../../api/apiClient';
 import React, { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import { Play, Pause, Volume2, VolumeX, Maximize, Settings, SignalLow } from 'lucide-react';
@@ -32,14 +32,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
     const checkMonetization = async () => {
         if (!videoId) return;
         try {
-            const res = await axios.get('/api/v1/monetization/config');
+            const res = await apiClient.get('/api/v1/monetization/config');
             if (res.data.enabled) {
                 // mock pre-roll trigger
                 setShowAd(true);
-                axios.post('/api/v1/monetization/ad-event', {
+                apiClient.post('/api/v1/monetization/ad-event', {
                     videoId, eventType: 'AD_REQUEST', provider: 'GOOGLE_IMA', sessionId: 'client-session-id'
                 }).catch(() => {});
-                axios.post('/api/v1/monetization/ad-event', {
+                apiClient.post('/api/v1/monetization/ad-event', {
                     videoId, eventType: 'AD_SERVED', provider: 'GOOGLE_IMA', sessionId: 'client-session-id'
                 }).catch(() => {});
             }
@@ -55,7 +55,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
               setAdTimeLeft(prev => prev - 1);
           }, 1000);
       } else if (showAd && adTimeLeft === 0) {
-          axios.post('/api/v1/monetization/ad-event', {
+          apiClient.post('/api/v1/monetization/ad-event', {
               videoId, eventType: 'AD_VIEWABLE', provider: 'GOOGLE_IMA', sessionId: 'client-session-id'
           }).catch(() => {});
       }
@@ -244,7 +244,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
           const completed = currentPosition >= duration * 0.95;
 
           // Send beacon without blocking main thread
-          axios.post('/api/v1/analytics/telemetry', {
+          apiClient.post('/api/v1/analytics/telemetry', {
             videoId,
             sessionId: 'client-session-id', // normally generated once per app load
             currentPosition,
