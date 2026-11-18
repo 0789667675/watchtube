@@ -1,10 +1,9 @@
 import express, { Request, Response } from 'express';
 import { z } from 'zod';
-import { PrismaClient } from '@watchtube/database';
+import { db as prisma } from '@watchtube/database';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { v4 as uuidv4 } from 'uuid';
 
-const prisma = new PrismaClient();
 const walletRouter = express.Router();
 
 walletRouter.get('/balance', authenticate, async (req: AuthRequest, res: Response) => {

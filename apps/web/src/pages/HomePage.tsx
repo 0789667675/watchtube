@@ -1,52 +1,49 @@
-import React, { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { apiClient, getApiErrorMessage } from '../api/apiClient';
 import { VideoCard } from '../components/video/VideoCard';
+import { EmptyState, ErrorState, LoadingState } from '../components/video/ViewerState';
+import type { ViewerVideo } from '../components/video/videoTypes';
 
-const CATEGORIES = ['All', 'Kinyarwanda', 'Music', 'Technology', 'Documentaries', 'Culture', 'Sports', 'News', 'Gaming', 'Education'];
+export function HomePage() {
+  const [videos, setVideos] = useState<ViewerVideo[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-// Mock data until API is wired up
-const MOCK_VIDEOS = Array(12).fill(null).map((_, i) => ({
-  id: `vid-${i}`,
-  title: 'Exploring the Virunga Mountains: A Journey Through Rwanda',
-  thumbnail: `https://images.unsplash.com/photo-1627398225081-24c8b0914db9?auto=format&fit=crop&q=80&w=1000&sig=${i}`, // Cache buster
-  duration: '45:20',
-  views: '24K',
-  date: '3 days ago',
-  channel: {
-    name: 'Rwanda Tourism',
-    handle: '@VisitRwanda',
-    avatar: 'https://images.unsplash.com/photo-1531297172864-822db6ce0d8d?auto=format&fit=crop&q=80&w=150',
-    isVerified: true,
-  }
-}));
+  useEffect(() => {
+    const controller = new AbortController();
 
-export const HomePage: React.FC = () => {
-  const [activeCategory, setActiveCategory] = useState('All');
+    apiClient.get<ViewerVideo[]>('/api/v1/videos', { signal: controller.signal })
+      .then(({ data }) => setVideos(data))
+      .catch((requestError: unknown) => {
+        if (!controller.signal.aborted) {
+          setError(getApiErrorMessage(requestError, 'Please try again in a moment.'));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIsLoading(false);
+      });
+
+    return () => controller.abort();
+  }, []);
 
   return (
-    <div className="w-full">
-      <div className="sticky top-16 z-40 bg-canvas-light/95 dark:bg-canvas-obsidian/95 backdrop-blur w-full border-b border-border-light dark:border-border-dark py-3 overflow-x-auto hide-scrollbar">
-        <div className="flex gap-3 px-4 md:px-6 w-max mx-auto md:mx-0">
-          {CATEGORIES.map(cat => (
-            <button
-              key={cat}
-              onClick={() => setActiveCategory(cat)}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition whitespace-nowrap ${
-                activeCategory === cat
-                  ? 'bg-brand-action text-brand-foreground hover:bg-brand-action-hover'
-                  : 'bg-surface-subtle text-text-primary hover:bg-surface-hover'
-              }`}
-            >
-              {cat}
-            </button>
-          ))}
-        </div>
-      </div>
+    <section className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8">
+      <header className="mb-6">
+        <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Discover something great</h1>
+        <p className="mt-1 text-text-muted">Explore the latest videos from WatchTube creators.</p>
+      </header>
 
-      <div className="p-4 md:p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-y-10 gap-x-4">
-        {MOCK_VIDEOS.map((video) => (
-          <VideoCard key={video.id} {...video} />
-        ))}
-      </div>
-    </div>
+      {isLoading ? (
+        <LoadingState label="Loading videos…" />
+      ) : error ? (
+        <ErrorState message={error} />
+      ) : videos.length === 0 ? (
+        <EmptyState title="No videos yet" message="Public videos will appear here when creators publish them." />
+      ) : (
+        <div className="grid grid-cols-1 gap-x-5 gap-y-8 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          {videos.map((video) => <VideoCard key={video.id} video={video} />)}
+        </div>
+      )}
+    </section>
   );
-};
+}

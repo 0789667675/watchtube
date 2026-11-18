@@ -1,9 +1,8 @@
 import express, { Request, Response } from 'express';
 import { z } from 'zod';
-import { PrismaClient } from '@watchtube/database';
+import { db as prisma } from '@watchtube/database';
 import { authenticate, AuthRequest } from '../middleware/auth';
 
-const prisma = new PrismaClient();
 const trustRouter = express.Router();
 
 const reportSchema = z.object({

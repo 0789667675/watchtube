@@ -3,11 +3,9 @@ import IORedis from 'ioredis';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { PrismaClient } from '@watchtube/database';
+import { db as prisma } from '@watchtube/database';
 import { downloadRawVideo, uploadPublicFile } from './services/storage.service';
 import { getVideoMetadata, extractPoster, extractThumbnails, createHLSRendition } from './services/transcode.service';
-
-const prisma = new PrismaClient();
 
 const redisConnection = process.env.REDIS_URL
     ? new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null })
@@ -164,12 +162,27 @@ const worker = new Worker(
 
                 const playlistUrl = `https://${publicDomain}/${m3u8S3Key}`;
 
-                await prisma.videoVariant.create({
-                    data: {
-                        videoId,
-                        resolution: rendition.name,
-                        bitrate: rendition.bitrate,
-                        playlistUrl
+                await prisma.$transaction(async (transaction) => {
+                    await transaction.$queryRaw`
+                        SELECT pg_advisory_xact_lock(hashtext(${videoId}), hashtext(${rendition.name}))
+                    `;
+                    const existingVariant = await transaction.videoVariant.findFirst({
+                        where: { videoId, resolution: rendition.name },
+                    });
+                    if (existingVariant) {
+                        await transaction.videoVariant.update({
+                            where: { id: existingVariant.id },
+                            data: { bitrate: rendition.bitrate, playlistUrl },
+                        });
+                    } else {
+                        await transaction.videoVariant.create({
+                            data: {
+                                videoId,
+                                resolution: rendition.name,
+                                bitrate: rendition.bitrate,
+                                playlistUrl,
+                            },
+                        });
                     }
                 });
 

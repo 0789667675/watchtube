@@ -1,8 +1,7 @@
 import express, { Request, Response } from 'express';
-import { PrismaClient } from '@watchtube/database';
+import { db as prisma } from '@watchtube/database';
 import { authenticate, AuthRequest } from '../middleware/auth';
 
-const prisma = new PrismaClient();
 const studioRouter = express.Router();
 
 studioRouter.get('/analytics', authenticate, async (req: AuthRequest, res: Response) => {

@@ -1,10 +1,9 @@
 import express, { Request, Response } from 'express';
 import { z } from 'zod';
-import { PrismaClient } from '@watchtube/database';
+import { db as prisma } from '@watchtube/database';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { requireAdmin } from '../middleware/admin';
 
-const prisma = new PrismaClient();
 const adminRouter = express.Router();
 
 adminRouter.use(authenticate, requireAdmin);

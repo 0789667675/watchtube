@@ -5,9 +5,10 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/tests/video-upload.route.test.js",
-    "dev": "ts-node src/index.ts",
-    "start": "node dist/index.js"
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/tests/video-upload.route.test.js dist-test/tests/creator-comments.route.test.js dist-test/tests/channel.route.test.js dist-test/tests/channel-image-upload.route.test.js dist-test/tests/channel-image-storage.test.js dist-test/tests/channel-image-validation.test.js dist-test/tests/service-endpoint-safety.test.js",
+    "dev": "node --env-file-if-exists=.env scripts/dev-local.cjs",
+    "dev:api": "node --env-file-if-exists=.env scripts/dev-local.cjs",
+    "start": "node --env-file-if-exists=.env dist/index.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
@@ -21,6 +22,7 @@
     "helmet": "^7.0.0",
     "ioredis": "^5.0.0",
     "jsonwebtoken": "^9.0.3",
+    "sharp": "^0.35.5",
     "uuid": "^14.0.3",
     "zod": "^3.0.0"
   },

@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:web": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/tests/videoUploadWorkflow.test.js",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/tests/videoUploadWorkflow.test.js dist-test/tests/channelImageUpload.test.js tests/viteProxy.integration.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

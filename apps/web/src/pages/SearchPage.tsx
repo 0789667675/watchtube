@@ -1,65 +1,67 @@
-import React, { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { apiClient, getApiErrorMessage } from '../api/apiClient';
 import { VideoCard } from '../components/video/VideoCard';
-import { apiClient } from '../api/apiClient';
+import { EmptyState, ErrorState, LoadingState } from '../components/video/ViewerState';
+import type { ViewerVideo } from '../components/video/videoTypes';
 
-export const SearchPage: React.FC = () => {
+interface SearchResult {
+  query: string;
+  videos: ViewerVideo[];
+  error: string | null;
+}
+
+export function SearchPage() {
   const [searchParams] = useSearchParams();
-  const q = searchParams.get('q');
-  const [videos, setVideos] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const query = searchParams.get('q')?.trim() ?? '';
+  const [result, setResult] = useState<SearchResult>({ query: '', videos: [], error: null });
 
   useEffect(() => {
-    const fetchResults = async () => {
-      if (!q) return;
-      setIsLoading(true);
-      try {
-        const response = await apiClient.get(`/api/v1/feed/search?q=${encodeURIComponent(q)}`);
-        setVideos(response.data);
-      } catch (error) {
-        console.error('Search failed:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    fetchResults();
-  }, [q]);
+    if (!query) return;
 
-  if (!q) {
-    return <div className="p-6 text-center text-text-muted">Please enter a search term.</div>;
-  }
+    const controller = new AbortController();
+
+    apiClient.get<ViewerVideo[]>('/api/v1/feed/search', {
+      params: { q: query },
+      signal: controller.signal,
+    })
+      .then(({ data }) => setResult({ query, videos: data, error: null }))
+      .catch((requestError: unknown) => {
+        if (!controller.signal.aborted) {
+          setResult({
+            query,
+            videos: [],
+            error: getApiErrorMessage(requestError, 'Please try your search again.'),
+          });
+        }
+      });
+
+    return () => controller.abort();
+  }, [query]);
+
+  const resultIsCurrent = result.query === query;
+  const videos = resultIsCurrent ? result.videos : [];
+  const error = resultIsCurrent ? result.error : null;
+  const isLoading = Boolean(query) && !resultIsCurrent;
 
   return (
-    <div className="w-full p-4 md:p-6 max-w-7xl mx-auto">
-      <h1 className="text-xl font-bold font-display mb-6">Search results for "{q}"</h1>
-
-      {isLoading ? (
-        <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-4 border-brand-primary border-t-transparent rounded-full" /></div>
-      ) : videos.length > 0 ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-y-10 gap-x-6">
-          {videos.map((video) => (
-            <VideoCard
-              key={video.id}
-              id={video.id}
-              title={video.title}
-              thumbnail={video.thumbnailUrl || ''}
-              duration={'Auto'}
-              views={`${video.viewsCount}`}
-              date={'Recently'}
-              channel={{
-                  name: video.channel.name,
-                  handle: video.channel.handle,
-                  avatar: video.channel.avatarUrl,
-                  isVerified: video.channel.isVerified
-              }}
-            />
-          ))}
-        </div>
+    <section className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8">
+      <h1 className="mb-6 text-2xl font-bold tracking-tight">
+        {query ? <>Search results for <span className="break-words">“{query}”</span></> : 'Search videos and channels'}
+      </h1>
+      {!query ? (
+        <EmptyState title="Enter a search term" message="Use the search field above to find videos and channels." />
+      ) : isLoading ? (
+        <LoadingState label="Searching videos…" />
+      ) : error ? (
+        <ErrorState message={error} />
+      ) : videos.length === 0 ? (
+        <EmptyState title="No results found" message={`There are no videos matching “${query}”.`} />
       ) : (
-        <div className="text-center py-20">
-          <p className="text-text-muted">No results found for "{q}".</p>
+        <div className="grid grid-cols-1 gap-x-5 gap-y-8 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          {videos.map((video) => <VideoCard key={video.id} video={video} />)}
         </div>
       )}
-    </div>
+    </section>
   );
-};
+}

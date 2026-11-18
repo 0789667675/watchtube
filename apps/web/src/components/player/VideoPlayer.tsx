@@ -1,14 +1,12 @@
-import { apiClient } from '../../api/apiClient';
 import React, { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import { Play, Pause, Volume2, VolumeX, Maximize, Settings, SignalLow } from 'lucide-react';
 
 interface VideoPlayerProps {
-  videoId?: string;
   src: string; // The master.m3u8 URL
 }
 
-export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
+export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -23,72 +21,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
   const [showResMenu, setShowResMenu] = useState(false);
   const [currentRes, setCurrentRes] = useState<number>(-1); // -1 is Auto
   const [levels, setLevels] = useState<{height: number; index: number}[]>([]);
-
-  const [showAd, setShowAd] = useState(false);
-  const [adTimeLeft, setAdTimeLeft] = useState(5);
-
-  useEffect(() => {
-    // Simulated VAST Ad Request
-    const checkMonetization = async () => {
-        if (!videoId) return;
-        try {
-            const res = await apiClient.get('/api/v1/monetization/config');
-            if (res.data.enabled) {
-                // mock pre-roll trigger
-                setShowAd(true);
-                apiClient.post('/api/v1/monetization/ad-event', {
-                    videoId, eventType: 'AD_REQUEST', provider: 'GOOGLE_IMA', sessionId: 'client-session-id'
-                }).catch(() => {});
-                apiClient.post('/api/v1/monetization/ad-event', {
-                    videoId, eventType: 'AD_SERVED', provider: 'GOOGLE_IMA', sessionId: 'client-session-id'
-                }).catch(() => {});
-            }
-        } catch (e) {}
-    };
-    checkMonetization();
-  }, [videoId]);
-
-  useEffect(() => {
-      let timer: number | ReturnType<typeof setInterval>;
-      if (showAd && adTimeLeft > 0) {
-          timer = setInterval(() => {
-              setAdTimeLeft(prev => prev - 1);
-          }, 1000);
-      } else if (showAd && adTimeLeft === 0) {
-          apiClient.post('/api/v1/monetization/ad-event', {
-              videoId, eventType: 'AD_VIEWABLE', provider: 'GOOGLE_IMA', sessionId: 'client-session-id'
-          }).catch(() => {});
-      }
-      return () => clearInterval(timer);
-  }, [showAd, adTimeLeft, videoId]);
-
-  const skipAd = () => {
-      setShowAd(false);
-      togglePlay();
-  };
-
-  const adOverlayRender = showAd ? (
-      <div className="absolute inset-0 z-50 bg-black flex flex-col items-center justify-center text-white">
-          <div className="text-xl font-bold font-display mb-4">Advertisement</div>
-          <div className="text-sm text-gray-400 mb-8">Video will resume shortly...</div>
-
-          <div className="absolute bottom-16 right-4 flex gap-4">
-              <div className="bg-gray-800/80 px-4 py-2 rounded">
-                  Ad · {adTimeLeft > 0 ? adTimeLeft : 0}:05
-              </div>
-              {adTimeLeft === 0 && (
-                  <button onClick={skipAd} className="rounded-control bg-brand-action px-4 py-2 font-bold text-brand-foreground transition hover:bg-brand-action-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
-                      Skip Ad
-                  </button>
-              )}
-          </div>
-      </div>
-  ) : null;
-
-
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
 
   const formatTime = (time: number) => {
-    if (isNaN(time)) return '00:00';
+    if (!Number.isFinite(time)) return '00:00';
     const min = Math.floor(time / 60).toString().padStart(2, '0');
     const sec = Math.floor(time % 60).toString().padStart(2, '0');
     return `${min}:${sec}`;
@@ -97,6 +33,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
+    setPlaybackError(null);
+    setIsPlaying(false);
 
     if (Hls.isSupported()) {
       const hls = new Hls({
@@ -120,18 +58,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
             setCurrentRes(-1);
         }
       });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (data.fatal) setPlaybackError('This video could not be played. Try again later.');
+      });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = src;
+    } else {
+      setPlaybackError('This browser does not support this video format.');
     }
 
-
-
-
-
     return () => {
-      if (hlsRef.current) {
-        hlsRef.current.destroy();
-      }
+      hlsRef.current?.destroy();
+      hlsRef.current = null;
     };
   }, [src, isLowBandwidth]);
 
@@ -166,44 +104,41 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
   };
 
   useEffect(() => {
-    let timeout: number | ReturnType<typeof setTimeout>;
+    let timeout: ReturnType<typeof setTimeout>;
     const handleMouseMove = () => {
       setShowControls(true);
       clearTimeout(timeout);
       timeout = setTimeout(() => setShowControls(false), 3000);
     };
+    const handleMouseLeave = () => setShowControls(false);
 
     const container = containerRef.current;
     if (container) {
       container.addEventListener('mousemove', handleMouseMove);
-      container.addEventListener('mouseleave', () => setShowControls(false));
+      container.addEventListener('mouseleave', handleMouseLeave);
     }
 
     return () => {
       if (container) {
         container.removeEventListener('mousemove', handleMouseMove);
-        container.removeEventListener('mouseleave', () => setShowControls(false));
+        container.removeEventListener('mouseleave', handleMouseLeave);
       }
       clearTimeout(timeout);
     };
   }, []);
 
   const togglePlay = () => {
-    if (videoRef.current) {
-      if (isPlaying) {
-        videoRef.current.pause();
-      } else {
-        videoRef.current.play();
-      }
-      setIsPlaying(!isPlaying);
-    }
+    const video = videoRef.current;
+    if (!video) return;
+    if (isPlaying) video.pause();
+    else void video.play().catch(() => setPlaybackError('Playback could not start. Try again.'));
   };
 
   const handleTimeUpdate = () => {
     if (videoRef.current) {
       const current = videoRef.current.currentTime;
       const total = videoRef.current.duration;
-      setProgress((current / total) * 100);
+      setProgress(total > 0 ? (current / total) * 100 : 0);
       setCurrentTime(formatTime(current));
     }
   };
@@ -232,47 +167,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
     }
   };
 
-  // Telemetry Engine Heartbeat
-  useEffect(() => {
-    let interval: number | ReturnType<typeof setInterval>;
-
-    if (isPlaying && videoId) {
-      interval = setInterval(() => {
-        if (videoRef.current) {
-          const currentPosition = videoRef.current.currentTime;
-          const duration = videoRef.current.duration;
-          const completed = currentPosition >= duration * 0.95;
-
-          // Send beacon without blocking main thread
-          apiClient.post('/api/v1/analytics/telemetry', {
-            videoId,
-            sessionId: 'client-session-id', // normally generated once per app load
-            currentPosition,
-            durationWatched: 5,
-            completed
-          }).catch(console.error);
-        }
-      }, 5000);
-    }
-
-    return () => clearInterval(interval);
-  }, [isPlaying, videoId]);
-
-
-
   return (
-    <div ref={containerRef} className="relative w-full aspect-video bg-black group overflow-hidden">
+    <div ref={containerRef} className="group relative aspect-video w-full overflow-hidden bg-black">
       <video
         ref={videoRef}
-        className="w-full h-full"
+        className="h-full w-full"
+        playsInline
         onClick={togglePlay}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
+        onError={() => setPlaybackError('This video could not be played. Try again later.')}
         onEnded={() => setIsPlaying(false)}
         muted={isMuted}
       />
-      {adOverlayRender}
-
+      {playbackError && (
+        <div role="alert" className="absolute inset-0 z-10 flex items-center justify-center bg-black/75 p-6 text-center text-sm text-white">
+          {playbackError}
+        </div>
+      )}
 
       <div className={`absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/80 to-transparent transition-opacity duration-300 ${showControls || !isPlaying ? 'opacity-100' : 'opacity-0'}`}>
         <div className="w-full mb-4">
@@ -283,15 +197,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
             value={progress || 0}
             onChange={handleSeek}
             className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-brand-light dark:accent-brand-dark"
+            aria-label="Seek video"
           />
         </div>
 
         <div className="flex items-center justify-between text-white">
           <div className="flex items-center gap-4">
-            <button onClick={togglePlay} className="hover:text-brand-light transition">
+            <button type="button" onClick={togglePlay} aria-label={isPlaying ? 'Pause video' : 'Play video'} className="hover:text-brand-light transition">
               {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6" />}
             </button>
-            <button onClick={() => setIsMuted(!isMuted)} className="hover:text-brand-light transition">
+            <button type="button" onClick={() => setIsMuted(!isMuted)} aria-label={isMuted ? 'Unmute video' : 'Mute video'} className="hover:text-brand-light transition">
               {isMuted ? <VolumeX className="w-6 h-6" /> : <Volume2 className="w-6 h-6" />}
             </button>
             <span className="font-display tabular-nums text-sm">
@@ -301,6 +216,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
 
           <div className="flex items-center gap-4 relative">
             <button
+                type="button"
                 onClick={toggleLowBandwidth}
                 className={`flex items-center gap-1 rounded-control px-2 py-1 text-xs transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus ${isLowBandwidth ? 'bg-status-warning text-status-warning-foreground' : 'bg-surface-subtle text-text-primary hover:bg-surface-hover'}`}
                 title="Low-Bandwidth Mode (360p)"
@@ -310,23 +226,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
             </button>
 
             <div className="relative">
-                <button onClick={() => setShowResMenu(!showResMenu)} className="hover:text-brand-light transition mt-1">
+                <button type="button" onClick={() => setShowResMenu(!showResMenu)} className="hover:text-brand-light transition mt-1" aria-label="Playback settings" aria-expanded={showResMenu}>
                     <Settings className="w-5 h-5 cursor-pointer" />
                 </button>
 
                 {showResMenu && (
-                    <div className="absolute bottom-8 right-0 bg-gray-900 border border-gray-700 rounded-lg py-2 flex flex-col min-w-[120px] z-50">
+                    <div className="absolute bottom-8 right-0 z-50 flex min-w-[120px] flex-col rounded-lg border border-border bg-surface-dark py-2 text-text-primary shadow-xl">
                         <button
-                            className={`px-4 py-1 text-left text-sm hover:bg-gray-800 ${currentRes === -1 ? 'text-brand-light font-bold' : ''}`}
+                            className={`px-4 py-1 text-left text-sm hover:bg-surface-hover ${currentRes === -1 ? 'text-brand-dark font-bold' : ''}`}
                             onClick={() => changeResolution(-1)}
+                            type="button"
                         >
                             Auto
                         </button>
                         {levels.map(level => (
                             <button
                                 key={level.index}
-                                className={`px-4 py-1 text-left text-sm hover:bg-gray-800 ${currentRes === level.index ? 'text-brand-light font-bold' : ''}`}
+                                className={`px-4 py-1 text-left text-sm hover:bg-surface-hover ${currentRes === level.index ? 'text-brand-dark font-bold' : ''}`}
                                 onClick={() => changeResolution(level.index)}
+                                type="button"
                             >
                                 {level.height}p
                             </button>
@@ -335,7 +253,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, videoId }) => {
                 )}
             </div>
 
-            <button onClick={toggleFullscreen} className="hover:text-brand-light transition mt-1">
+            <button type="button" onClick={toggleFullscreen} aria-label="Toggle fullscreen" className="hover:text-brand-light transition mt-1">
               <Maximize className="w-5 h-5" />
             </button>
           </div>

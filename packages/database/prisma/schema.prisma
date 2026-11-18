@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
 }
 
 enum Role {
@@ -38,6 +39,17 @@ model User {
   reports      Report[] @relation("UserReports")
   claims       CopyrightClaim[] @relation("UserClaims")
   strikes      UserStrike[]
+}
+
+model LegacyUser {
+  id        String   @id @db.Text
+  email     String   @unique @db.Text
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @db.Timestamp(3)
+  name      String?  @db.Text
+
+  @@map("User_legacy_20261109")
+  @@ignore
 }
 
 model Channel {

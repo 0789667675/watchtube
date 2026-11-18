@@ -1,32 +1,51 @@
-# React + TypeScript + Vite
+# WatchTube Viewer
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The Viewer is the React application in this workspace. It uses the existing API
+for public video discovery, search, trending, channel pages, playback metadata,
+subscriptions, and comments. The frontend does not substitute sample content
+when an API request fails.
 
-Currently, two official plugins are available:
+## Routes
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- `/` — latest public videos
+- `/search?q=...` — video search results
+- `/feed/trending` — trending videos
+- `/feed/subscriptions` — authenticated subscription feed
+- `/watch/:id` — video playback, channel subscription, and comments
+- `/channel/:handle` — public channel profile and videos
 
-## React Compiler
+Viewer routes are mounted in `src/App.tsx`. Their API requests use
+`src/api/apiClient.ts` and the existing `/api/v1` endpoints.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Themes and responsive navigation
 
-## Expanding the Oxlint configuration
+The Viewer follows the v2.1 design references in `../../docs/design-assets/v2.1`.
+Light mode retains the existing porcelain palette; dark mode uses a black canvas
+with blue and cyan accents. The header toggle persists the selection in
+`localStorage`, and the default follows the system preference. The sidebar,
+mobile/tablet navigation, and search layout adapt at the configured responsive
+breakpoints.
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+## Development and checks
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+Run the Viewer and API together from the monorepo root:
+
+```sh
+pnpm dev:app
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Turbo manages both processes and stops them together. The API reads
+`apps/api/.env` and accepts only loopback PostgreSQL and Redis endpoints in this
+local-only command. The Vite `/api` proxy uses the API `PORT` from the shell or
+`apps/api/.env`, defaulting to 3001. The root `.env` is not used by this
+command; the development proxy rejects non-loopback targets.
+
+The applications can also be started independently:
+
+```sh
+pnpm --filter @watchtube/web dev
+pnpm --filter @watchtube/api dev
+pnpm --filter @watchtube/web build
+pnpm --filter @watchtube/web lint
+pnpm --filter @watchtube/web test
+```

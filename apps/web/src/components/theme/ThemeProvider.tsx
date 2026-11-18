@@ -32,7 +32,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     root.dataset.themePreference = hasUserPreference ? 'user' : 'system';
     document
       .querySelector<HTMLMetaElement>('meta[name="theme-color"]')
-      ?.setAttribute('content', theme === 'dark' ? '#0B1220' : '#F4F7FB');
+      ?.setAttribute('content', theme === 'dark' ? '#000000' : '#F4F7FB');
 
     if (hasUserPreference) {
       try {

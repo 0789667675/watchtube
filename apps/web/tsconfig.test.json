@@ -11,6 +11,6 @@
     "outDir": "dist-test",
     "types": ["node"]
   },
-  "include": ["src/api/videoUploadWorkflow.ts", "tests/**/*.test.ts"],
+  "include": ["src/api/videoUploadWorkflow.ts", "src/api/channelImageUpload.ts", "tests/**/*.test.ts"],
   "exclude": ["node_modules", "dist-test"]
 }

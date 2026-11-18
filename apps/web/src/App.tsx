@@ -13,6 +13,9 @@ import { MonetizationPage } from './pages/studio/MonetizationPage';
 import { AdminDashboard } from './pages/admin/AdminDashboard';
 import { RevenuePage } from './pages/admin/RevenuePage';
 import { DashboardPage } from './pages/studio/DashboardPage';
+import { ChannelPage } from './pages/ChannelPage';
+import { SettingsPage } from './pages/studio/SettingsPage';
+import { CommentsPage } from './pages/studio/CommentsPage';
 
 function App() {
   return (
@@ -23,6 +26,7 @@ function App() {
           <Route path="feed/subscriptions" element={<SubscriptionsPage />} />
           <Route path="search" element={<SearchPage />} />
           <Route path="feed/trending" element={<TrendingPage />} />
+          <Route path="channel/:handle" element={<ChannelPage />} />
           <Route path="watch/:id" element={<WatchPage />} />
         </Route>
 
@@ -35,6 +39,8 @@ function App() {
           <Route index element={<DashboardPage />} />
           <Route path="content" element={<ContentPage />} />
           <Route path="monetization" element={<MonetizationPage />} />
+          <Route path="comments" element={<CommentsPage />} />
+          <Route path="settings" element={<SettingsPage />} />
         </Route>
         <Route path="/admin" element={<AdminDashboard />} />
           <Route path="/admin/revenue" element={<RevenuePage />} />

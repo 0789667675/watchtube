@@ -7,11 +7,16 @@
     "build": "turbo run build",
     "build:api": "pnpm --filter @watchtube/database db:generate && pnpm --filter @watchtube/database build && pnpm --filter @watchtube/api build",
     "dev": "turbo run dev",
+    "dev:app": "turbo run dev:api dev:web",
     "lint": "turbo run lint",
     "test": "turbo run test"
   },
   "packageManager": "pnpm@10.30.3",
   "devDependencies": {
     "turbo": "latest"
+  },
+  "dependencies": {
+    "@neon/config": "^1.14.2",
+    "@neon/env": "^2.1.5"
   }
 }

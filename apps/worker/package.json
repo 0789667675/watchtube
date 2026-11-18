@@ -5,7 +5,7 @@
   "main": "dist/worker.js",
   "scripts": {
     "build": "tsc",
-    "dev": "ts-node src/worker.ts",
+    "dev": "node --env-file=../../.env -r ts-node/register src/worker.ts",
     "start": "node dist/worker.js"
   },
   "dependencies": {

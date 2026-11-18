@@ -7,6 +7,16 @@
     "moduleResolution": "node",
     "types": ["node"]
   },
-  "include": ["src/middleware/cors.ts", "src/routes/video-upload.route.ts", "tests/**/*.ts"],
+  "include": [
+    "src/middleware/cors.ts",
+    "src/config/serviceEndpointSafety.ts",
+    "src/routes/channel.route.ts",
+    "src/routes/channel-image-upload.route.ts",
+    "src/routes/video-upload.route.ts",
+    "src/routes/creator-comments.route.ts",
+    "src/services/channel-image.service.ts",
+    "src/services/storage.service.ts",
+    "tests/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist", "dist-test"]
 }

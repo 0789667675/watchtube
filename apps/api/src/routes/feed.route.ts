@@ -1,8 +1,7 @@
 import express, { Request, Response } from 'express';
 import { z } from 'zod';
-import { PrismaClient } from '@watchtube/database';
+import { db as prisma } from '@watchtube/database';
 
-const prisma = new PrismaClient();
 const feedRouter = express.Router();
 
 feedRouter.get('/search', async (req: Request, res: Response) => {

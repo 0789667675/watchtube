@@ -22,7 +22,7 @@
             preference === 'dark' || preference === 'light' ? 'user' : 'system';
           document
             .querySelector('meta[name="theme-color"]')
-            ?.setAttribute('content', theme === 'dark' ? '#0B1220' : '#F4F7FB');
+            ?.setAttribute('content', theme === 'dark' ? '#000000' : '#F4F7FB');
         } catch (error) {
           console.error('Unable to read the WatchTube theme preference.', error);
           const theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
@@ -32,7 +32,7 @@
           root.dataset.themePreference = 'system';
           document
             .querySelector('meta[name="theme-color"]')
-            ?.setAttribute('content', theme === 'dark' ? '#0B1220' : '#F4F7FB');
+            ?.setAttribute('content', theme === 'dark' ? '#000000' : '#F4F7FB');
         }
       })();
     </script>
@@ -44,7 +44,7 @@
 
       :root.dark {
         color-scheme: dark;
-        background: #0b1220;
+        background: #000000;
       }
 
       body {

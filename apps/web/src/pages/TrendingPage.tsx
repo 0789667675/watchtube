@@ -1,65 +1,54 @@
-import React, { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { apiClient, getApiErrorMessage } from '../api/apiClient';
 import { VideoCard } from '../components/video/VideoCard';
-import { apiClient } from '../api/apiClient';
+import { EmptyState, ErrorState, LoadingState } from '../components/video/ViewerState';
+import type { ViewerVideo } from '../components/video/videoTypes';
 
-export const TrendingPage: React.FC = () => {
-  const [videos, setVideos] = useState<any[]>([]);
+export function TrendingPage() {
+  const [videos, setVideos] = useState<ViewerVideo[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const fetchTrending = async () => {
-      try {
-        const response = await apiClient.get('/api/v1/feed/trending');
-        setVideos(response.data);
-      } catch (error) {
-        console.error('Trending fetch failed:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    fetchTrending();
+    const controller = new AbortController();
+    apiClient.get<ViewerVideo[]>('/api/v1/feed/trending', { signal: controller.signal })
+      .then(({ data }) => setVideos(data))
+      .catch((requestError: unknown) => {
+        if (!controller.signal.aborted) {
+          setError(getApiErrorMessage(requestError, 'Please try again in a moment.'));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIsLoading(false);
+      });
+    return () => controller.abort();
   }, []);
 
   return (
-    <div className="w-full p-4 md:p-6 max-w-7xl mx-auto">
-      <h1 className="text-2xl font-bold font-display mb-6">Trending Now</h1>
+    <section className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8">
+      <header className="mb-6">
+        <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Trending</h1>
+        <p className="mt-1 text-text-muted">Videos people are watching now.</p>
+      </header>
 
       {isLoading ? (
-        <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-4 border-brand-primary border-t-transparent rounded-full" /></div>
-      ) : videos.length > 0 ? (
-        <div className="flex flex-col gap-6">
+        <LoadingState label="Loading trending videos…" />
+      ) : error ? (
+        <ErrorState message={error} />
+      ) : videos.length === 0 ? (
+        <EmptyState title="Nothing trending yet" message="Check back when new public videos are available." />
+      ) : (
+        <div className="grid grid-cols-1 gap-x-5 gap-y-8 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {videos.map((video, index) => (
-            <div key={video.id} className="flex gap-4 items-start relative group">
-              <div className="absolute -left-2 -top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full border-2 border-canvas-light bg-brand-action font-bold text-brand-foreground shadow-sm dark:border-canvas-obsidian">
+            <div key={video.id} className="relative">
+              <span className="absolute -left-2 -top-2 z-10 rounded-full border border-border bg-surface-raised px-2.5 py-1 text-xs font-bold text-brand-dark">
                 #{index + 1}
-              </div>
-              <div className="w-full sm:w-80 shrink-0">
-                  <VideoCard
-                    id={video.id}
-                    title={video.title}
-                    thumbnail={video.thumbnailUrl || ''}
-                    duration={'Auto'}
-                    views={`${video.viewsCount}`}
-                    date={'Recently'}
-                    channel={{
-                        name: video.channel.name,
-                        handle: video.channel.handle,
-                        avatar: video.channel.avatarUrl,
-                        isVerified: video.channel.isVerified
-                    }}
-                  />
-              </div>
-              <div className="hidden sm:block flex-1 pt-2">
-                 <p className="line-clamp-3 text-sm text-text-muted">{video.description}</p>
-              </div>
+              </span>
+              <VideoCard video={video} />
             </div>
           ))}
         </div>
-      ) : (
-        <div className="text-center py-20">
-          <p className="text-text-muted">No trending videos right now.</p>
-        </div>
       )}
-    </div>
+    </section>
   );
-};
+}

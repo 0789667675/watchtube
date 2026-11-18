@@ -1,129 +1,237 @@
-import React, { useState, useEffect } from 'react';
-import { apiClient } from '../../api/apiClient';
-import { DollarSign, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import axios from 'axios';
+import { Link } from 'react-router-dom';
+import { CheckCircle2, CircleDollarSign, ShieldAlert } from 'lucide-react';
+import { apiClient, getApiErrorMessage } from '../../api/apiClient';
 import { isStudioMonetizationStatus } from './studioApi';
 import type { StudioMonetizationStatus } from './studioApi';
 
-export const MonetizationPage: React.FC = () => {
-  const [status, setStatus] = useState<StudioMonetizationStatus | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+type StatusResult =
+  | { state: 'loading' }
+  | { state: 'ready'; value: StudioMonetizationStatus }
+  | { state: 'no-channel' }
+  | { state: 'error'; message: string };
+
+function isPendingApplication(value: unknown): boolean {
+  return typeof value === 'object'
+    && value !== null
+    && !Array.isArray(value)
+    && 'status' in value
+    && value.status === 'PENDING';
+}
+
+export function MonetizationPage() {
+  const [attempt, setAttempt] = useState(0);
+  const [result, setResult] = useState<StatusResult>({ state: 'loading' });
   const [isApplying, setIsApplying] = useState(false);
+  const [applicationError, setApplicationError] = useState('');
+  const [applicationNotice, setApplicationNotice] = useState('');
 
   useEffect(() => {
-    const fetchStatus = async () => {
-      try {
-        const response = await apiClient.get<unknown>('/api/v1/wtpp/status');
-        if (isStudioMonetizationStatus(response.data)) {
-          setStatus(response.data);
+    const controller = new AbortController();
+    apiClient.get<unknown>('/api/v1/wtpp/status', { signal: controller.signal })
+      .then(({ data }) => {
+        if (isStudioMonetizationStatus(data)) {
+          setResult({ state: 'ready', value: data });
         } else {
-          console.error('Monetization status response did not match the expected format.');
-          setStatus(null);
+          setResult({ state: 'error', message: 'Monetization status could not be verified.' });
         }
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    fetchStatus();
-  }, []);
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        if (axios.isAxiosError(requestError) && requestError.response?.status === 404) {
+          setResult({ state: 'no-channel' });
+        } else {
+          setResult({
+            state: 'error',
+            message: getApiErrorMessage(requestError, 'Monetization status is unavailable right now.'),
+          });
+        }
+      });
+    return () => controller.abort();
+  }, [attempt]);
 
   const handleApply = async () => {
+    if (
+      result.state !== 'ready' ||
+      !result.value.isEligible ||
+      (result.value.applicationStatus !== 'NOT_APPLIED' && result.value.applicationStatus !== 'REJECTED') ||
+      isApplying
+    ) return;
+
     setIsApplying(true);
+    setApplicationError('');
+    setApplicationNotice('');
     try {
-      await apiClient.post('/api/v1/wtpp/apply', {});
-      setStatus(current => current ? { ...current, applicationStatus: 'PENDING' } : current);
-    } catch (error) {
-      console.error('Failed to submit monetization application:', error);
-      alert('Failed to submit application');
+      const { data } = await apiClient.post<unknown>('/api/v1/wtpp/apply', {});
+      if (!isPendingApplication(data)) {
+        throw new Error('The server did not confirm a pending application.');
+      }
+      setResult({
+        state: 'ready',
+        value: { ...result.value, applicationStatus: 'PENDING' },
+      });
+      setApplicationNotice('Your application was submitted and is pending review.');
+    } catch (requestError) {
+      setApplicationError(getApiErrorMessage(requestError, 'The application could not be confirmed.'));
     } finally {
       setIsApplying(false);
     }
   };
 
-  if (isLoading) return <div className="p-6">Loading monetization status...</div>;
-  if (!status) return <div className="p-6 text-text-muted" role="alert">Monetization status is unavailable. Check the API connection and try again.</div>;
+  if (result.state === 'loading') {
+    return <p role="status" className="p-4 text-sm text-text-muted">Loading monetization status…</p>;
+  }
 
-  const subPercent = Math.min((status.subscriberCount / 1000) * 100, 100);
-  const hoursPercent = Math.min((status.totalWatchHours / 4000) * 100, 100);
+  if (result.state === 'no-channel') {
+    return (
+      <section className="mx-auto max-w-3xl rounded-card border border-border bg-surface-light p-6 dark:bg-surface-dark sm:p-8">
+        <h1 className="text-xl font-bold">Create a channel to continue</h1>
+        <p className="mt-2 text-sm text-text-muted">WTPP eligibility is available after you create a channel.</p>
+        <Link to="/studio/content" className="mt-5 inline-flex rounded-control bg-brand-action px-4 py-2 font-semibold text-brand-foreground hover:bg-brand-action-hover">
+          Go to channel content
+        </Link>
+      </section>
+    );
+  }
+
+  if (result.state === 'error') {
+    return (
+      <section role="alert" className="mx-auto max-w-3xl rounded-card border border-border bg-surface-light p-6 dark:bg-surface-dark">
+        <h1 className="text-xl font-bold">Monetization status unavailable</h1>
+        <p className="mt-2 text-sm text-text-muted">{result.message}</p>
+        <button
+          type="button"
+          onClick={() => {
+            setResult({ state: 'loading' });
+            setAttempt((current) => current + 1);
+          }}
+          className="mt-4 rounded-control bg-surface-subtle px-4 py-2 text-sm font-semibold hover:bg-surface-hover"
+        >
+          Retry
+        </button>
+      </section>
+    );
+  }
+
+  const status = result.value;
+  const subscriberProgress = Math.min((status.subscriberCount / 1000) * 100, 100);
+  const watchHoursProgress = Math.min((status.totalWatchHours / 4000) * 100, 100);
 
   return (
-    <div className="max-w-4xl mx-auto p-4 md:p-6 space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold font-display mb-2">WatchTube Partner Program</h1>
-        <p className="text-text-muted">Join the WTPP to monetize your content and get access to creator support.</p>
-      </div>
+    <section className="mx-auto max-w-4xl space-y-6">
+      <header>
+        <h1 className="text-2xl font-bold tracking-tight">WatchTube Partner Program</h1>
+        <p className="mt-1 text-sm text-text-muted">Eligibility and application status from the WTPP service.</p>
+      </header>
+
+      {applicationNotice && (
+        <p role="status" className="rounded-control border border-border bg-surface-light p-4 text-sm dark:bg-surface-dark">
+          {applicationNotice}
+        </p>
+      )}
 
       {status.isMonetized ? (
-        <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl p-6 flex items-start gap-4">
-          <div className="bg-green-100 dark:bg-green-800 p-3 rounded-full shrink-0">
-            <DollarSign className="w-8 h-8 text-green-600 dark:text-green-400" />
+        <section className="rounded-card border border-green-300 bg-green-50 p-6 dark:border-green-800 dark:bg-green-950/30">
+          <div className="flex items-start gap-4">
+            <CircleDollarSign aria-hidden="true" className="h-8 w-8 shrink-0 text-green-700 dark:text-green-400" />
+            <div>
+              <h2 className="text-lg font-bold text-green-900 dark:text-green-300">Monetization is enabled</h2>
+              <p className="mt-1 text-sm text-green-800 dark:text-green-200">
+                This channel is marked as monetized by the WTPP service. Review recorded wallet activity on the overview page.
+              </p>
+              <Link to="/studio#payouts" className="mt-3 inline-flex text-sm font-semibold text-green-900 underline dark:text-green-200">
+                View wallet activity
+              </Link>
+            </div>
           </div>
-          <div>
-            <h2 className="text-xl font-bold text-green-800 dark:text-green-400 mb-2">You are a WatchTube Partner!</h2>
-            <p className="text-green-700 dark:text-green-500">Your channel is currently monetized. Revenue will automatically accumulate in your Creator Wallet.</p>
-          </div>
-        </div>
+        </section>
       ) : (
-        <div className="bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark rounded-xl p-6">
-          <h2 className="text-lg font-bold mb-6">Eligibility Requirements</h2>
+        <section className="rounded-card border border-border bg-surface-light p-5 dark:bg-surface-dark sm:p-6">
+          <h2 className="text-lg font-semibold">Eligibility requirements</h2>
+          <p className="mt-1 text-sm text-text-muted">Progress is based on the metrics currently reported by the service.</p>
 
-          <div className="space-y-6 mb-8">
-            <div>
-              <div className="flex justify-between text-sm font-medium mb-2">
-                <span>{status.subscriberCount} Subscribers</span>
-                <span className="text-text-muted">1,000 required</span>
+          <div className="mt-6 space-y-6">
+            <ProgressMetric
+              label="Subscribers"
+              value={new Intl.NumberFormat().format(status.subscriberCount)}
+              target="1,000"
+              progress={subscriberProgress}
+            />
+            <ProgressMetric
+              label="Watch time"
+              value={`${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(status.totalWatchHours)} hours`}
+              target="4,000 hours"
+              progress={watchHoursProgress}
+            />
+            <div className="flex items-start gap-3 rounded-control bg-surface-subtle p-4">
+              {status.activeStrikes === 0
+                ? <CheckCircle2 aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-green-600" />
+                : <ShieldAlert aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-status-warning" />}
+              <div>
+                <p className="font-medium">{new Intl.NumberFormat().format(status.activeStrikes)} active strikes</p>
+                <p className="mt-1 text-sm text-text-muted">
+                  {status.activeStrikes === 0 ? 'No active strikes are reported.' : 'An active strike is reported for this account.'}
+                </p>
               </div>
-              <div className="h-2 w-full rounded-full bg-surface-subtle">
-                <div className="bg-brand-primary h-2 rounded-full" style={{ width: `${subPercent}%` }} />
-              </div>
-            </div>
-
-            <div>
-              <div className="flex justify-between text-sm font-medium mb-2">
-                <span>{status.totalWatchHours.toFixed(1)} Watch Hours</span>
-                <span className="text-text-muted">4,000 required</span>
-              </div>
-              <div className="h-2 w-full rounded-full bg-surface-subtle">
-                <div className="bg-brand-primary h-2 rounded-full" style={{ width: `${hoursPercent}%` }} />
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              {status.activeStrikes === 0 ? (
-                <CheckCircle2 className="w-5 h-5 text-green-500" />
-              ) : (
-                <ShieldAlert className="w-5 h-5 text-red-500" />
-              )}
-              <span className="font-medium text-sm">
-                {status.activeStrikes} Active Community Guidelines Strikes
-              </span>
             </div>
           </div>
 
-          <div className="border-t border-border-light dark:border-border-dark pt-6">
+          <div className="mt-6 border-t border-divider pt-5">
             {status.applicationStatus === 'PENDING' && (
-              <button disabled className="rounded-full bg-surface-subtle px-6 py-2 font-bold text-text-muted">
-                Application Pending Review
-              </button>
+              <p role="status" className="font-semibold">Application pending review</p>
             )}
-
             {status.applicationStatus === 'REJECTED' && (
-              <div className="text-red-600 font-bold mb-4">Your previous application was rejected. Please review community guidelines before reapplying.</div>
+              <p className="mb-3 text-sm text-status-warning">The previous application was rejected. You may reapply if the current eligibility requirements are met.</p>
             )}
-
             {(status.applicationStatus === 'NOT_APPLIED' || status.applicationStatus === 'REJECTED') && (
-              <button
-                onClick={handleApply}
-                disabled={!status.isEligible || isApplying}
-                className="rounded-full bg-brand-action px-6 py-2 font-bold text-brand-foreground transition hover:bg-brand-action-hover disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
-              >
-                {isApplying ? 'Submitting...' : 'Apply Now'}
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={handleApply}
+                  disabled={!status.isEligible || isApplying}
+                  className="rounded-full bg-brand-action px-6 py-2.5 font-semibold text-brand-foreground transition hover:bg-brand-action-hover disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isApplying ? 'Submitting…' : 'Apply to WTPP'}
+                </button>
+                {!status.isEligible && <p className="mt-2 text-sm text-text-muted">Application is unavailable until the service reports all requirements met.</p>}
+              </>
             )}
+            {applicationError && <p role="alert" className="mt-3 text-sm text-status-warning">{applicationError}</p>}
           </div>
-        </div>
+        </section>
       )}
+    </section>
+  );
+}
+
+function ProgressMetric({
+  label,
+  value,
+  target,
+  progress,
+}: {
+  label: string;
+  value: string;
+  target: string;
+  progress: number;
+}) {
+  const progressValue = Math.round(progress);
+
+  return (
+    <div>
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2 text-sm">
+        <span className="font-medium">{label}: {value}</span>
+        <span className="text-text-muted">Target: {target}</span>
+      </div>
+      <progress
+        aria-label={`${label} progress`}
+        max={100}
+        value={progressValue}
+        className="h-2 w-full accent-brand-primary"
+      >
+        {progressValue}%
+      </progress>
     </div>
   );
-};
+}

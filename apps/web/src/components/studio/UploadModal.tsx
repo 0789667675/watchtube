@@ -50,7 +50,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   const [videoId, setVideoId] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState('');
-  const { register, handleSubmit, reset } = useForm<UploadForm>();
+  const { register, handleSubmit, reset, formState: { errors } } = useForm<UploadForm>();
 
   const workflowDependencies: UploadWorkflowDependencies = {
     requestIntent: async (metadata) => (
@@ -141,6 +141,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   const retryVerification = async () => {
     if (!videoId) return;
     setError('');
+    setPhase('verifying');
     try {
       await retryUploadVerification(workflowDependencies, videoId);
       setPhase('processing');
@@ -197,7 +198,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
     reset({ title: acceptedFiles[0].name });
   }, [reset]);
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive, fileRejections } = useDropzone({
     onDrop,
     accept: {
       'video/mp4': ['.mp4'],
@@ -214,9 +215,14 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="w-full max-w-2xl bg-surface-light dark:bg-surface-dark rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="upload-dialog-title"
+        className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl border border-border bg-surface-light shadow-xl dark:bg-surface-dark"
+      >
         <div className="flex justify-between items-center p-4 border-b border-border-light dark:border-border-dark">
-          <h2 className="text-xl font-bold font-display">Upload Video</h2>
+          <h2 id="upload-dialog-title" className="text-xl font-bold font-display">Upload video</h2>
           <button type="button" onClick={onClose} disabled={isBusy} aria-label="Close upload dialog" className="rounded-full p-1 transition hover:bg-surface-hover disabled:opacity-50">
             <X className="w-6 h-6" />
           </button>
@@ -231,6 +237,15 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               <p className="text-sm text-text-muted">MP4, WebM, or QuickTime, up to 2 GB.</p>
             </div>
           )}
+          {fileRejections.length > 0 && (
+            <div role="alert" className="rounded-control bg-surface-subtle p-3 text-sm text-status-warning">
+              {fileRejections.map(({ file: rejectedFile, errors: rejectionErrors }) => (
+                <p key={`${rejectedFile.name}-${rejectedFile.size}`}>
+                  {rejectedFile.name}: {rejectionErrors.map((item) => item.message).join(' ')}
+                </p>
+              ))}
+            </div>
+          )}
 
           {file && (
             <>
@@ -240,15 +255,26 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                   <label className="block text-sm font-medium">
                     Title
                     <input
-                      {...register('title', { required: true, maxLength: 255 })}
+                      {...register('title', {
+                        required: 'Enter a video title.',
+                        maxLength: { value: 255, message: 'Video titles must be 255 characters or fewer.' },
+                        validate: (value) => value.trim().length > 0 || 'Enter a video title.',
+                      })}
+                      maxLength={255}
+                      aria-invalid={Boolean(errors.title)}
+                      aria-describedby={errors.title ? 'upload-title-error' : undefined}
                       className="mt-1 w-full rounded-lg border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-obsidian px-4 py-2"
                     />
                   </label>
+                  {errors.title?.message && <p id="upload-title-error" role="alert" className="text-sm text-status-warning">{errors.title.message}</p>}
                   {phase === 'uploading' && (
                     <div aria-live="polite">
-                      <div className="h-2 w-full overflow-hidden rounded-full bg-surface-hover">
-                        <div className="h-full bg-brand-primary transition-all" style={{ width: `${progress}%` }} />
-                      </div>
+                      <progress
+                        aria-label="Video upload progress"
+                        max={100}
+                        value={progress}
+                        className="h-2 w-full accent-brand-action"
+                      />
                       <p className="mt-1 text-xs text-text-muted">Uploading: {progress}%</p>
                     </div>
                   )}
@@ -268,7 +294,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               {phase === 'processing' && <p role="status">Processing video…</p>}
               {phase === 'ready-to-watch' && <p role="status">Video processing completed.</p>}
               {phase === 'rejected' && <p role="alert">Video processing failed.</p>}
-              {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+              {error && <p role="alert" className="text-sm text-status-warning">{error}</p>}
             </>
           )}
         </div>

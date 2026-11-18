@@ -32,21 +32,21 @@
 
   :root.dark {
     color-scheme: dark;
-    --wt-canvas: 11 18 32;
-    --wt-surface: 18 29 46;
-    --wt-surface-subtle: 25 40 60;
-    --wt-surface-raised: 28 44 65;
-    --wt-surface-hover: 31 49 72;
-    --wt-border: 43 61 85;
-    --wt-divider: 43 61 85;
+    --wt-canvas: 0 0 0;
+    --wt-surface: 10 16 25;
+    --wt-surface-subtle: 20 30 43;
+    --wt-surface-raised: 24 36 51;
+    --wt-surface-hover: 31 45 63;
+    --wt-border: 38 52 72;
+    --wt-divider: 38 52 72;
     --wt-text-primary: 243 247 252;
     --wt-text-muted: 168 182 200;
     --wt-brand-text: 56 201 245;
-    --wt-brand-action: 18 103 193;
+    --wt-brand-action: 18 119 232;
     --wt-brand-action-hover: 11 95 175;
     --wt-focus: 56 201 245;
     --wt-status-warning: 255 196 102;
-    --wt-status-warning-foreground: 11 18 32;
+    --wt-status-warning-foreground: 0 0 0;
   }
 
   html,

@@ -1,15 +1,60 @@
 import react from '@vitejs/plugin-react'
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { parseEnv } from 'node:util'
 import { defineConfig } from 'vite'
 
-// https://vite.dev/config/
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    proxy: {
-      '/api': {
-        target: process.env.API_PROXY_TARGET || 'http://127.0.0.1:3001',
-        changeOrigin: true,
+export default defineConfig(({ mode }) => {
+  const monorepoRoot = resolve(process.cwd(), '..', '..')
+  const localOnly = process.env.WATCHTUBE_LOCAL_ONLY === '1'
+  const readRuntimeEnv = (directory: string) => {
+    const values: Record<string, string> = {}
+    for (const filename of ['.env', '.env.local', `.env.${mode}`, `.env.${mode}.local`]) {
+      const path = resolve(directory, filename)
+      if (!existsSync(path)) continue
+      Object.assign(values, parseEnv(readFileSync(path, 'utf8')))
+    }
+    return values
+  }
+
+  const apiEnv = localOnly ? {} : readRuntimeEnv(resolve(monorepoRoot, 'apps/api'))
+  const webEnv = localOnly ? {} : readRuntimeEnv(process.cwd())
+  const apiPort = process.env.PORT || apiEnv.PORT || '3001'
+  if (!/^\d+$/.test(apiPort) || Number(apiPort) < 1 || Number(apiPort) > 65535) {
+    throw new Error('API PORT must be an integer between 1 and 65535.')
+  }
+  const proxyTarget = localOnly
+    ? `http://127.0.0.1:${apiPort}`
+    : process.env.API_PROXY_TARGET
+      || webEnv.API_PROXY_TARGET
+      || apiEnv.API_PROXY_TARGET
+      || `http://127.0.0.1:${apiPort}`
+
+  if (!localOnly && mode === 'development' && process.env.WATCHTUBE_ALLOW_EXTERNAL_SERVICES !== '1') {
+    let proxyUrl: URL
+    try {
+      proxyUrl = new URL(proxyTarget)
+    } catch {
+      throw new Error('API_PROXY_TARGET must be a valid URL.')
+    }
+    const hostname = proxyUrl.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+    if (
+      !['http:', 'https:'].includes(proxyUrl.protocol)
+      || !['localhost', '127.0.0.1', '::1'].includes(hostname)
+    ) {
+      throw new Error('Local Vite development requires a loopback API_PROXY_TARGET.');
+    }
+  }
+
+  return {
+    plugins: [react()],
+    server: {
+      proxy: {
+        '/api': {
+          target: proxyTarget,
+          changeOrigin: true,
+        },
       },
     },
-  },
+  }
 })
