@@ -11,7 +11,7 @@
     --wt-surface-raised: 255 255 255;
     --wt-surface-hover: 232 239 247;
     --wt-border: 220 229 240;
-    --wt-divider: 220 229 240;
+    --wt-divider: var(--wt-border);
     --wt-text-primary: 22 36 58;
     --wt-text-muted: 100 116 139;
     --wt-brand-primary: 22 119 232;
@@ -38,11 +38,9 @@
     --wt-surface-raised: 24 36 51;
     --wt-surface-hover: 31 45 63;
     --wt-border: 38 52 72;
-    --wt-divider: 38 52 72;
     --wt-text-primary: 243 247 252;
     --wt-text-muted: 168 182 200;
     --wt-brand-text: 56 201 245;
-    --wt-brand-action: 18 119 232;
     --wt-brand-action-hover: 11 95 175;
     --wt-focus: 56 201 245;
     --wt-status-warning: 255 196 102;
@@ -82,5 +80,12 @@
   .hide-scrollbar {
     -ms-overflow-style: none;
     scrollbar-width: none;
+  }
+  .mobile-bottom-nav {
+    height: calc(4rem + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .mobile-nav-clearance {
+    padding-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
   }
 }

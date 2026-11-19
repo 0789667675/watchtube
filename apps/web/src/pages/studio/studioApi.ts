@@ -1,7 +1,8 @@
 export interface StudioVideoPerformance {
   id: string;
   title: string;
-  viewsCount: number;
+  views: number;
+  watchHours: number;
   _count: {
     likes: number;
     comments: number;
@@ -9,6 +10,10 @@ export interface StudioVideoPerformance {
 }
 
 export interface StudioAnalytics {
+  period: {
+    from: string;
+    to: string;
+  };
   subscriberCount: number;
   totalViews: number;
   totalWatchHours: number;
@@ -29,12 +34,14 @@ export interface StudioLedgerEntry {
 }
 
 export interface StudioMonetizationStatus {
-  subscriberCount: number;
-  totalWatchHours: number;
-  activeStrikes: number;
+  channelId: string;
+  channelName: string;
+  channelHandle: string;
   isMonetized: boolean;
-  applicationStatus: 'PENDING' | 'REJECTED' | 'NOT_APPLIED';
-  isEligible: boolean;
+  applicationStatus: 'PENDING' | 'APPROVED' | 'REJECTED' | 'NOT_APPLIED';
+  canApply: boolean;
+  reviewerNotes: string | null;
+  reviewedAt: string | null;
 }
 
 export interface StudioChannel {
@@ -82,6 +89,16 @@ export interface StudioOutletContext {
   profile: StudioProfile;
   addChannel: (channel: StudioChannel) => void;
   updateChannel: (channel: StudioChannelSettings) => void;
+}
+
+export function isStudioChannel(value: unknown): value is StudioChannel {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && typeof value.handle === 'string'
+    && (value.description === undefined || value.description === null || typeof value.description === 'string')
+    && (value.avatarUrl === undefined || value.avatarUrl === null || typeof value.avatarUrl === 'string')
+    && (value.bannerUrl === undefined || value.bannerUrl === null || typeof value.bannerUrl === 'string');
 }
 
 export interface StudioComment {
@@ -220,6 +237,11 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 export function isStudioAnalytics(value: unknown): value is StudioAnalytics {
   return isRecord(value)
+    && isRecord(value.period)
+    && typeof value.period.from === 'string'
+    && Number.isFinite(Date.parse(value.period.from))
+    && typeof value.period.to === 'string'
+    && Number.isFinite(Date.parse(value.period.to))
     && isNonNegativeInteger(value.subscriberCount)
     && isNonNegativeInteger(value.totalViews)
     && isNonNegativeNumber(value.totalWatchHours)
@@ -228,7 +250,8 @@ export function isStudioAnalytics(value: unknown): value is StudioAnalytics {
       isRecord(video)
       && typeof video.id === 'string'
       && typeof video.title === 'string'
-      && isNonNegativeInteger(video.viewsCount)
+      && isNonNegativeInteger(video.views)
+      && isNonNegativeNumber(video.watchHours)
       && isRecord(video._count)
       && isNonNegativeInteger(video._count.likes)
       && isNonNegativeInteger(video._count.comments)
@@ -258,12 +281,16 @@ export function isStudioLedger(value: unknown): value is StudioLedgerEntry[] {
 
 export function isStudioMonetizationStatus(value: unknown): value is StudioMonetizationStatus {
   return isRecord(value)
-    && isNonNegativeInteger(value.subscriberCount)
-    && isNonNegativeNumber(value.totalWatchHours)
-    && isNonNegativeInteger(value.activeStrikes)
+    && typeof value.channelId === 'string'
+    && typeof value.channelName === 'string'
+    && typeof value.channelHandle === 'string'
     && typeof value.isMonetized === 'boolean'
     && (value.applicationStatus === 'PENDING'
+      || value.applicationStatus === 'APPROVED'
       || value.applicationStatus === 'REJECTED'
       || value.applicationStatus === 'NOT_APPLIED')
-    && typeof value.isEligible === 'boolean';
+    && typeof value.canApply === 'boolean'
+    && (value.reviewerNotes === null || typeof value.reviewerNotes === 'string')
+    && (value.reviewedAt === null
+      || (typeof value.reviewedAt === 'string' && Number.isFinite(Date.parse(value.reviewedAt))));
 }

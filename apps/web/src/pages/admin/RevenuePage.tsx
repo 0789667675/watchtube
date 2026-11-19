@@ -1,108 +1,93 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { apiClient } from '../../api/apiClient';
-import { DollarSign, Scale, CheckCircle2 } from 'lucide-react';
+import { Scale } from 'lucide-react';
 
 export const RevenuePage: React.FC = () => {
-  const [isReconciling, setIsReconciling] = useState(false);
-  const [monthYear, setMonthYear] = useState('2026-10');
-  const [grossRevenue, setGrossRevenue] = useState('1000000');
   const [escrows, setEscrows] = useState<any[]>([]);
+  const [isLoadingEscrows, setIsLoadingEscrows] = useState(true);
+  const [escrowLoadError, setEscrowLoadError] = useState('');
+  const [escrowRefreshKey, setEscrowRefreshKey] = useState(0);
 
   useEffect(() => {
-    // In reality, this would fetch active escrows from a real admin endpoint
-    setEscrows([
-        { id: '1', claimId: 'c1', heldAmountCents: 50000, video: { title: 'Understanding HLS' } },
-        { id: '2', claimId: 'c2', heldAmountCents: 15000, video: { title: 'PostgreSQL Tricks' } }
-    ]);
-  }, []);
-
-  const handleReconcile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsReconciling(true);
-    try {
-        const res = await apiClient.post('/api/v1/admin/monetization/reconcile', {
-            monthYear,
-            grossProviderRevenueCents: Number(grossRevenue)
-        });
-        alert(`Reconciliation Successful! Creator pool disbursed: ${res.data.creatorPoolCents}`);
-    } catch (error) {
-        alert('Reconciliation failed or already finalized for this month.');
-    } finally {
-        setIsReconciling(false);
-    }
-  };
-
-  const resolveEscrow = async (id: string, claimId: string, decision: 'RELEASE_TO_CREATOR' | 'TRANSFER_TO_CLAIMANT') => {
+    let isCurrent = true;
+    const fetchEscrows = async () => {
+      setIsLoadingEscrows(true);
+      setEscrowLoadError('');
       try {
-          await apiClient.post(`/api/v1/admin/copyright/claims/${claimId}/resolve-escrow`, { decision });
-          setEscrows(escrows.filter(e => e.id !== id));
-      } catch (error) {
-          alert('Failed to resolve escrow. It may have already been resolved.');
+        const res = await apiClient.get('/api/v1/admin/copyright/escrows');
+        if (isCurrent) setEscrows(res.data);
+      } catch {
+        if (isCurrent) setEscrowLoadError('Unable to load active escrow holds.');
+      } finally {
+        if (isCurrent) setIsLoadingEscrows(false);
       }
+    };
+
+    fetchEscrows();
+    return () => {
+      isCurrent = false;
+    };
+  }, [escrowRefreshKey]);
+
+  const centsLabel = (amount: number | string) => {
+    if (typeof amount === 'string') {
+      try {
+        return `${BigInt(amount).toLocaleString()} cents`;
+      } catch {
+        return `${amount} cents`;
+      }
+    }
+    return `${amount.toLocaleString(undefined, { maximumFractionDigits: 1 })} cents`;
   };
 
   return (
     <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-6">
-      <h1 className="text-2xl font-bold font-display">Revenue & Escrow Management</h1>
+      <h1 className="text-2xl font-bold font-display">Revenue &amp; Escrow Management</h1>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-
-        {/* Reconciliation Panel */}
-        <div className="bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark rounded-xl shadow-sm p-6">
-            <div className="flex items-center gap-3 mb-6">
-                <DollarSign className="w-6 h-6 text-green-500" />
-                <h2 className="text-xl font-bold">Monthly Reconciliation (50/50 Split)</h2>
-            </div>
-
-            <form onSubmit={handleReconcile} className="space-y-4">
-                <div>
-                    <label className="block text-sm font-medium mb-1">Month-Year (YYYY-MM)</label>
-                    <input value={monthYear} onChange={e => setMonthYear(e.target.value)} required type="text" className="w-full rounded-lg border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-obsidian px-4 py-2" />
-                </div>
-                <div>
-                    <label className="block text-sm font-medium mb-1">Gross Provider Revenue (Cents)</label>
-                    <input value={grossRevenue} onChange={e => setGrossRevenue(e.target.value)} required type="number" min="0" className="w-full rounded-lg border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-obsidian px-4 py-2" />
-                </div>
-
-                <div className="mt-4 flex flex-col gap-2 rounded-control bg-surface-subtle p-4 text-sm font-medium">
-                    <div className="flex justify-between text-text-muted"><span>Platform Share (50%)</span><span>{Number(grossRevenue) * 0.5}</span></div>
-                    <div className="flex justify-between border-b border-divider pb-2 text-text-muted"><span>Creator Pool (50%)</span><span>{Number(grossRevenue) * 0.5}</span></div>
-                    <div className="flex justify-between font-bold text-base pt-1"><span>Total Gross</span><span>{grossRevenue}</span></div>
-                </div>
-
-                <button type="submit" disabled={isReconciling} className="mt-2 w-full rounded-control bg-brand-action py-2 font-bold text-brand-foreground transition hover:bg-brand-action-hover disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
-                    {isReconciling ? 'Executing Dispersals...' : 'Finalize & Distribute to Wallets'}
-                </button>
-            </form>
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+        <div className="rounded-xl border border-border-light bg-surface-light p-6 shadow-sm dark:border-border-dark dark:bg-surface-dark">
+          <div className="mb-4 flex items-center gap-3">
+            <Scale className="w-6 h-6 text-status-warning" />
+            <h2 className="text-xl font-bold">Revenue reconciliation unavailable</h2>
+          </div>
+          <p className="text-sm text-text-muted">
+            No verified advertising allocation or payment-provider settlement is available. Revenue cannot be entered manually,
+            estimated, split, or distributed from this screen.
+          </p>
+          <p className="mt-3 text-sm text-text-muted">
+            The approved target split is 50% WatchTube / 50% creator. Provider fees, invalid-traffic deductions, calculation basis,
+            payout minimum and schedule, and tax treatment still require documented policy decisions.
+          </p>
         </div>
 
-        {/* Escrow Holds Panel */}
-        <div className="bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark rounded-xl shadow-sm p-6 flex flex-col">
-            <div className="flex items-center gap-3 mb-6">
-                <Scale className="w-6 h-6 text-status-warning" />
-                <h2 className="text-xl font-bold">Active Copyright Escrow Holds</h2>
-            </div>
+        <div className="flex flex-col rounded-xl border border-border-light bg-surface-light p-6 shadow-sm dark:border-border-dark dark:bg-surface-dark">
+          <div className="mb-6 flex items-center gap-3">
+            <Scale className="w-6 h-6 text-status-warning" />
+            <h2 className="text-xl font-bold">Active Copyright Escrow Holds</h2>
+          </div>
 
-            <div className="flex-1 overflow-y-auto">
-                {escrows.map(e => (
-                    <div key={e.id} className="border border-border-light dark:border-border-dark rounded-lg p-4 mb-4">
-                        <div className="font-bold mb-1 truncate">{e.video.title}</div>
-                        <div className="mb-4 font-medium text-status-warning">{e.heldAmountCents} Cents Withheld</div>
-
-                        <div className="flex flex-wrap gap-2 text-sm font-bold">
-                            <button onClick={() => resolveEscrow(e.id, e.claimId, 'RELEASE_TO_CREATOR')} className="flex items-center gap-1 bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 px-3 py-1.5 rounded flex-1 justify-center">
-                                <CheckCircle2 className="w-4 h-4" /> Release to Creator
-                            </button>
-                            <button onClick={() => resolveEscrow(e.id, e.claimId, 'TRANSFER_TO_CLAIMANT')} className="flex items-center gap-1 bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300 px-3 py-1.5 rounded flex-1 justify-center">
-                                Transfer to Claimant
-                            </button>
-                        </div>
-                    </div>
-                ))}
-                {escrows.length === 0 && <div className="py-10 text-center text-text-muted">No active escrow holds.</div>}
+          {isLoadingEscrows && <div role="status" className="mb-4 text-text-muted">Loading escrow holds…</div>}
+          {escrowLoadError && (
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3" role="alert">
+              <span className="text-red-600">{escrowLoadError}</span>
+              <button type="button" onClick={() => setEscrowRefreshKey(key => key + 1)} className="rounded-control bg-surface-subtle px-3 py-1 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">Retry</button>
             </div>
+          )}
+          <p className="mb-4 rounded-control bg-surface-subtle p-3 text-sm text-text-muted">
+            Escrow settlement is disabled until each held amount has a verified allocation source and an auditable resolution workflow.
+          </p>
+          <div className="flex-1 overflow-y-auto">
+            {escrows.map(escrow => (
+              <div key={escrow.id} className="mb-4 rounded-lg border border-border-light p-4 dark:border-border-dark">
+                <div className="mb-1 truncate font-bold">{escrow.video?.title || 'Video unavailable'}</div>
+                <div className="mb-4 font-medium text-status-warning">{centsLabel(String(escrow.heldAmountCents))} withheld</div>
+
+                <p className="text-sm font-medium text-text-muted">Resolution unavailable pending verified allocation.</p>
+              </div>
+            ))}
+            {!isLoadingEscrows && !escrowLoadError && escrows.length === 0 && <div className="py-10 text-center text-text-muted">No active escrow holds.</div>}
+          </div>
         </div>
-
       </div>
     </div>
   );

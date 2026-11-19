@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.createChannelRouter = createChannelRouter;
 const express_1 = require("express");
 const zod_1 = require("zod");
+const databaseErrors_1 = require("../config/databaseErrors");
 const handleSchema = zod_1.z.string()
     .trim()
     .transform((value) => value.startsWith('@') ? value : `@${value}`)
@@ -32,8 +33,8 @@ function isUniqueConstraintError(error) {
         && error.code === 'P2002';
 }
 function sendInternalError(res, error) {
-    console.error('Channel settings request failed:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Channel settings request failed.');
+    (0, databaseErrors_1.sendDatabaseErrorResponse)(res, error, 'Channel data is temporarily unavailable because the database is unavailable.');
 }
 function createChannelRouter(dependencies) {
     const router = (0, express_1.Router)();

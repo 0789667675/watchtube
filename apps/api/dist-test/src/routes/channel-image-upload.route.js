@@ -5,6 +5,7 @@ const express_1 = require("express");
 const jsonwebtoken_1 = require("jsonwebtoken");
 const zod_1 = require("zod");
 const channel_image_service_1 = require("../services/channel-image.service");
+const databaseErrors_1 = require("../config/databaseErrors");
 const PURPOSES = ['avatar', 'banner'];
 const CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const routeParamsSchema = zod_1.z.object({
@@ -34,9 +35,9 @@ function getUserId(req, res) {
     }
     return userId;
 }
-function sendRepositoryError(res) {
+function sendRepositoryError(res, error) {
     console.error('Channel image settings could not be persisted.');
-    res.status(500).json({ error: 'Channel image settings could not be saved.' });
+    (0, databaseErrors_1.sendDatabaseErrorResponse)(res, error, 'Channel settings are temporarily unavailable because the database is unavailable.');
 }
 function sendStorageError(res) {
     console.error('Channel image storage operation failed.');
@@ -80,8 +81,8 @@ function createChannelImageUploadRouter(dependencies) {
         try {
             ownsChannel = await dependencies.repository.ownsChannel(channelId, userId);
         }
-        catch {
-            sendRepositoryError(res);
+        catch (error) {
+            sendRepositoryError(res, error);
             return;
         }
         if (!ownsChannel) {
@@ -150,8 +151,8 @@ function createChannelImageUploadRouter(dependencies) {
                 return;
             }
         }
-        catch {
-            sendRepositoryError(res);
+        catch (error) {
+            sendRepositoryError(res, error);
             return;
         }
         let imageUrl;
@@ -184,8 +185,8 @@ function createChannelImageUploadRouter(dependencies) {
             }
             res.status(200).json({ channel, imageUrl });
         }
-        catch {
-            sendRepositoryError(res);
+        catch (error) {
+            sendRepositoryError(res, error);
         }
     });
     return router;

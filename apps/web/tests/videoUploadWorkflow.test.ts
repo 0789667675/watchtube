@@ -3,10 +3,14 @@ import { test } from 'node:test';
 import {
   retryUploadVerification,
   retryVideoUpload,
+  normalizeUploadTitle,
+  sanitizeUploadProgress,
   startVideoUpload,
   UploadWorkflowError,
   type UploadFile,
   type UploadWorkflowDependencies,
+  validateUploadFile,
+  validateUploadTitle,
 } from '../src/api/videoUploadWorkflow.js';
 
 const file: UploadFile = { name: 'clip.mp4', size: 1024, type: 'video/mp4' };
@@ -112,4 +116,42 @@ test('failed authorization does not report an upload or create a video', async (
       error.videoId === undefined,
   );
   assert.deepEqual(dependencies.calls, ['intent']);
+});
+
+test('upload validation rejects unsafe file metadata', () => {
+  assert.equal(validateUploadFile(file), null);
+  assert.match(validateUploadFile({ ...file, type: 'image/png' }) ?? '', /MP4|WebM|QuickTime/);
+  assert.match(validateUploadFile({ ...file, size: 0 }) ?? '', /empty/i);
+  assert.match(validateUploadFile({ ...file, size: 2 * 1024 * 1024 * 1024 + 1 }) ?? '', /2 GB/i);
+});
+
+test('upload title is normalized and bounded', () => {
+  assert.equal(normalizeUploadTitle('  My   video  '), 'My video');
+  assert.equal(validateUploadTitle('  '), 'Enter a video title.');
+  assert.equal(validateUploadTitle('x'.repeat(256)), 'Video titles must be 255 characters or fewer.');
+  assert.equal(validateUploadTitle('  Valid title  '), null);
+});
+
+test('progress callbacks clamp values to the visible 0-100 range', async () => {
+  assert.equal(sanitizeUploadProgress(-10), 0);
+  assert.equal(sanitizeUploadProgress(101), 100);
+  assert.equal(sanitizeUploadProgress(Number.NaN), 0);
+  assert.equal(sanitizeUploadProgress(42.4), 42);
+
+  const dependencies = createDependencies();
+  const progress: number[] = [];
+  dependencies.upload = async (_url, _file, onProgress) => {
+    dependencies.calls.push('upload:progress');
+    onProgress(-25);
+    onProgress(125);
+  };
+
+  await startVideoUpload(
+    dependencies,
+    metadata,
+    file,
+    () => undefined,
+    (value) => { progress.push(value); },
+  );
+  assert.deepEqual(progress, [0, 100]);
 });

@@ -1,5 +1,21 @@
 # WATCHTUBE — PROJECT TECHNICAL AUDIT, BASELINE & PROGRESS TRACKING
 
+---
+
+## Stabilization Verification — November 18, 2026
+
+- **Repository state:** `main`, HEAD `3cbfd9c708826915a2c6d440f52f9898f880ec69`; no staged changes; no commit or push performed during stabilization.
+- **Environment isolation:** API and web development launchers now set loopback-only mode. The API rejects external PostgreSQL/Redis hosts in local-only mode; the web wrapper forces local-only Vite configuration and ignores external proxy env candidates.
+- **Smoke test evidence:** The API listened on loopback port `43117` with dummy PostgreSQL/Redis endpoints at `127.0.0.1:1`. Vite listened on loopback port `5174`. `/health` returned `200`; `/api/v1/auth/me` returned `401`; `/api/v1/videos` and `/api/v1/feed/search?q=hy` reached the API and returned honest `500` responses because the dummy database was unreachable. No `ECONNREFUSED` or external-service connection occurred. API and Vite were stopped after the smoke test; common smoke/API ports were not left listening.
+- **Security verification:** Read-only security review found no additional vulnerabilities in the reviewed remediation. Authentication revalidates current database role/status and rejects restricted/suspended/deleted users. Public video/comment/reply queries require accessible video visibility. Unverified ad events are disabled and return `501`.
+- **Viewer/Studio:** Actual Viewer state reset/comment loading, Channel report/subscription state, Upload retry/status, and Studio analytics/payout/report components remain present and are covered by available source/test checks.
+- **Backup prototype:** Synthetic tests pass for encryption round trips, wrong-key/ciphertext rejection, size limits, interruption cleanup, key/marker create-only behavior, and restore verification. No real PostgreSQL/R2 backup or restore was attempted.
+- **Database:** Remains read-only/offline for this task. The prior P2021/missing-table and unresolved Neon branch findings remain unresolved. No migration, db push, table change, record change, restore, or external database connection was attempted.
+- **Test status:** API tests `55/55`; API build passed; web tests `13/13`; web build passed with a large-chunk warning; web lint passed with 6 warnings and 0 errors; backup tests `18/18`; offline Prisma validation passed.
+- **Current instability:** Database-backed routes cannot be proven against a real local database until the missing schema/migrations and Neon branch identity are resolved. Production readiness remains blocked.
+
+---
+
 **Audit Date:** November 4, 2026  
 **Last Updated:** November 9, 2026 (Task 2B.1: Disposable Baseline Simulation Verified; Production Still Blocked)
 **Auditor / Engineer:** Senior Software Architect & Full-Stack Engineer  
@@ -102,9 +118,9 @@ D:\watchtube\watchtube\
 │   │       └── pages/
 │   │           ├── HomePage.tsx           # Category pills & responsive video feed
 │   │           ├── WatchPage.tsx          # Video watch view, comments, and up-next
-│   │           ├── SearchPage.tsx         # Video search results
+│   │           ├── SearchPage.tsx         # Paginated public video and creator search
 │   │           ├── SubscriptionsPage.tsx  # Subscribed channels feed
-│   │           ├── TrendingPage.tsx       # Trending velocity feed
+│   │           ├── TrendingPage.tsx       # Engagement-ranked public video feed
 │   │           ├── auth/
 │   │           │   ├── LoginPage.tsx      # User login form
 │   │           │   └── RegisterPage.tsx   # User registration form
@@ -251,7 +267,7 @@ erDiagram
 | 8 | HLS Adaptive Streaming | `apps/worker/src/worker.ts` | **PARTIALLY IMPLEMENTED** | Generates 360p, 720p, 1080p ABR renditions and master playlist. Missing 144p, 240p, 480p from blueprint. |
 | 9 | Video Playback | `apps/web/src/components/player/VideoPlayer.tsx` | **IMPLEMENTED & VERIFIED** | HLS.js custom chrome, Virunga emerald scrubber, Data-Saver button, level selector, builds with 0 errors. |
 | 10 | Home Discovery Feed | `apps/web/src/pages/HomePage.tsx`, API `/videos` | **PARTIALLY IMPLEMENTED** | API `/api/v1/videos` supports pagination. Frontend currently renders hardcoded `MOCK_VIDEOS`. |
-| 11 | Search & Categories | `apps/api/src/routes/feed.route.ts` | **PARTIALLY IMPLEMENTED** | Prisma `contains` query on title/desc/channel. Missing PostgreSQL Full-Text GIN index and search suggestions. |
+| 11 | Search & Categories | `apps/api/src/routes/feed.route.ts`, `apps/web/src/pages/SearchPage.tsx` | **IMPLEMENTED; DATABASE RESULTS UNVERIFIED** | Search returns separately paginated public video and channel/creator results, validates query/page size, and has loading/error/retry/empty states. No full-text index or live database search test. |
 | 12 | Likes & Comments | `apps/api/src/routes/interaction.route.ts` | **PARTIALLY IMPLEMENTED** | Cursor-paginated comments, threaded replies, and likes API complete. Frontend UI is currently mock/local state. |
 | 13 | Subscriptions & History | `apps/api/src/routes/interaction.route.ts` | **PARTIALLY IMPLEMENTED** | Transactional subscribe/unsubscribe and subscription feed complete in API. Frontend not yet wired. |
 | 14 | Creator Studio | `apps/web/src/pages/studio/*` | **PARTIALLY IMPLEMENTED** | Studio Layout, Dashboard, Content, and Monetization pages implemented in `apps/web` (not standalone app). |
@@ -501,3 +517,252 @@ pnpm exec prisma migrate diff --from-url "$env:DATABASE_URL" --to-schema-datamod
 - The first `validate` is static. The first `psql` is read-only preflight; verify the target identity and exact legacy schema, and record its row count. `migrate resolve` records **only** `20261109070000_baseline_legacy_user` as applied (zero SQL steps); it does not execute its DDL. The next read-only query and `migrate status` must show that baseline finished and `20261109082031_init_preserve_legacy_user` still pending, with the original table unchanged. Only `migrate deploy` executes the existing `20261109082031_init_preserve_legacy_user`, which archives `User` and creates the current Prisma schema.
 - Final read-only checks must show both migrations finished, 18 current model tables, and `User_legacy_20261109` retaining the preflight row count, columns, PK, and indexes. The expected Prisma schema diff is only the intentionally out-of-model archive table; no diff SQL is to be executed.
 - If any command fails, target identity is unexpected, migration status differs, or row/schema checks do not match, stop immediately. Do not rerun, reset, drop, truncate, use `db push`, mark the schema-creation migration applied, roll back/repair migration history, or attempt destructive repair. Preserve output and use read-only inspection only.
+
+---
+
+## 11. Repository Evidence Completion Map — November 18, 2026
+
+This section is an additive, factual assessment; it supersedes only the status conclusions listed below when they conflict with newer repository evidence. It does not claim live database, external service, browser, or production readiness.
+
+| Category | Status | Concise evidence |
+|---|---|---|
+| Foundation | **Partial** | pnpm/Turborepo and shared Prisma/TypeScript packages exist (`package.json`, `turbo.json`, `pnpm-workspace.yaml`, `packages/*`). Database migration baseline remains blocked by a zero-versus-one-row discrepancy. `pnpm build` was not green on November 18: database/types packages passed, but web build failed on `ReportModal.tsx(18,10)` unused `error`. |
+| Auth | **Partial** | Registration, login, logout, `/me`, JWT cookies, bcrypt, role and account-state middleware exist (`apps/api/src/routes/auth.route.ts`, `apps/api/src/middleware/auth.ts`). Auth middleware tests pass (4 tests). No live end-to-end auth/database verification or refresh-token/session-revocation implementation is established. |
+| Viewer | **Partial** | Home, watch, channel, trending, subscription, comments, and responsive layout routes/pages are present and wired (`apps/web/src/App.tsx`, `apps/web/src/pages/*`). Trending now ranks public records using recorded views and comment counts, requires a real view/like/comment signal, and paginates. Focused API tests and the web build pass; live database results and browser/E2E remain unverified. |
+| Search | **Partial** | `/api/v1/feed/search` validates a bounded query/page, returns separately paginated public videos and creator channels, and filters videos to `READY`/`PUBLISHED` plus `PUBLIC`. Focused API tests and the web build pass. No full-text index or live database/browser search verification. |
+| Ingestion | **Partial** | Pre-signed upload intent, owner-scoped URL renewal, verification, upload-status routes, and the web upload workflow are implemented (`apps/api/src/routes/video-upload.route.ts`, `apps/web/src/components/studio/UploadModal.tsx`). API/video and channel-image tests pass. Actual storage credentials and a live object-store round trip are not verified. |
+| Processing | **Partial** | BullMQ worker and FFmpeg HLS, thumbnail, poster, metadata, and 360p/720p/1080p rendition code exists (`apps/worker/src/worker.ts`, `apps/worker/src/services/transcode.service.ts`). Builds and unit-level tests do not prove processing: FFmpeg/ffprobe availability and live storage/database processing remain unverified. |
+| Studio | **Partial** | Studio routes/pages, content management, monetization, comments, settings, channel updates, analytics, and real upload workflows exist (`apps/web/src/pages/studio/*`, `apps/api/src/routes/studio.route.ts`). Channel and upload API suites pass, but no live database/browser studio workflow and no complete web build are verified. |
+| Community | **Partial** | Like, subscription, comment, reply, cursor pagination, reports, and copyright claim routes exist (`apps/api/src/routes/interaction.route.ts`, `apps/api/src/routes/trust.route.ts`). Route-level tests cover comments/channel/public access; a live database/community end-to-end flow is not verified. |
+| Monetization | **Partial** | Wallet/ledger, payout request, WTPP status/application, ad event/config/reconcile, and provider admin routes exist (`apps/api/src/routes/wallet.route.ts`, `apps/api/src/routes/monetization.route.ts`, `apps/api/src/routes/trust.route.ts`). Monetization tests pass and real MTN/Airtel API clients, withdrawal threshold enforcement, and live settlement are not evidenced. |
+| Admin | **Partial** | Admin RBAC plus report, WTPP, copyright, escrow, and ad-provider routes/pages exist (`apps/api/src/middleware/admin.ts`, `apps/api/src/routes/admin.route.ts`, `apps/web/src/pages/admin/*`). No admin workflow test suite or live database/browser verification demonstrates operational completion. |
+| Mobile | **Not implemented** | No `apps/mobile` or `apps/studio-mobile` directory exists in the repository. |
+| Security | **Partial** | Helmet, Zod, bcrypt, JWT claim revalidation, role/account-state checks, allowlist CORS, public-media filtering, endpoint safety, and upload ownership/ticket validation exist. 53 API tests pass, including CORS and service-endpoint safety. Rate limiting, CSRF strategy, refresh-token/session revocation, and production CORS/session deployment are not fully evidenced. |
+| Testing | **Needs verification** | Repository has 53 passing API tests, 8 passing web tests, 18 passing synthetic backup tests, and lint exit 0 with warnings. No full web build: `pnpm build` failed. No database-backed integration suite, worker processing test, browser/E2E suite, or production smoke test is evidenced. |
+| Deployment | **Not implemented** | No Dockerfile, Compose/Kubernetes/Helm, Nginx, CI workflow, or production IaC was found. Database migration remains blocked and external PostgreSQL/R2/Redis/FFmpeg services are not production-verified. |
+
+### Verification commands run on November 18, 2026
+
+```powershell
+Set-Location 'D:\watchtube\watchtube'
+pnpm build
+# Failed: web build stopped by src/components/modals/ReportModal.tsx unused variable "error".
+
+pnpm --filter @watchtube/api test
+# Passed: 53/53 tests.
+
+pnpm --filter @watchtube/web test
+# Passed: 8/8 tests.
+
+pnpm --filter @watchtube/web lint
+# Exit 0; reported warnings, including unused catch variables and React set-state/effect warnings.
+
+node --test tools\backup-system\tests\core.test.mjs tools\backup-system\tests\queue-recovery.test.mjs tools\backup-system\tests\storage.test.mjs tools\backup-system\tests\postgres.test.mjs
+# Passed: 18/18 synthetic backup tests.
+```
+
+---
+
+## 12. Immediate Local Development Repair — November 19, 2026
+
+This checklist is based on the implementation, focused tests, loopback endpoint checks, and the approved fresh local database setup performed for the local development repair. It does not claim production readiness.
+
+### 1. Foundation
+- [x] Local API process starts on `127.0.0.1:3001` in local-only mode without PostgreSQL or Redis; `/health` remains live.
+- [x] Vite local proxy uses the API port and ignores external proxy/API base URL overrides in local-only mode.
+- [x] The local `watchtube` database was reached using an explicit loopback-only process URL; Prisma reports all three migrations applied and the schema up to date.
+- [x] API readiness and Vite-proxied health return 200 with PostgreSQL and Redis connected; storage remains accurately reported as unconfigured.
+
+### 2. Video Ingestion
+
+- [x] Upload authorization, metadata validation/persistence, storage/queue-unavailable handling, owner checks, thumbnail validation, publication gating, and retry paths have focused mocked API tests.
+- [~] Video selection, title, description, thumbnail preview/replacement, tags, category, language, audience, and visibility controls are connected to creator API routes.
+- [~] Draft saving/editing, upload progress/cancellation, retry, processing states, private worker staging, and publication-time media promotion are implemented; real R2 access and FFmpeg processing remain unverified.
+- [~] Creator copyright declaration is persisted with the declaring user and timestamp; admin claim review and blocking/takedown handling are implemented.
+- [ ] R2 configuration for local API/worker runtimes, real raw/public bucket access, and end-to-end upload verification.
+- [ ] Genuine automated copyright matching; no matching provider is integrated and no "passed" scan is claimed.
+
+### 3. Trending and Search Discovery
+- [x] Trending no longer excludes videos solely because they were created outside a 48-hour window; it uses recorded view counts and comment counts and requires a real view, positive like, or comment signal.
+- [x] Trending filters to public `READY`/`PUBLISHED` videos and supports validated offset pagination; focused API tests cover ranking query, privacy filters, pagination, and database failure behavior.
+- [x] Search validates the query and pagination, returns distinct paginated public-video and creator-channel matches, and excludes private/unlisted video records.
+- [~] Trending/Search pages implement responsive results, creator links, loading, empty, retry/error, and pagination UI; API/web tests and builds pass, but no browser or live-database discovery test was run.
+- [ ] Live database ranking/search results and end-to-end browser verification.
+- [x] Subscriptions was not modified for this task.
+
+### 4. Viewer Experience
+- [~] Home/videos and unauthenticated Subscriptions health were previously checked locally; no live viewer-feed result was queried during the Trending/Search repair.
+- [~] Search and Trending API behavior is verified with mocked repositories; live public content/results are not verified.
+- [x] The existing Subscriptions route/page and behavior were left unchanged in this task.
+
+### 5. Creator Studio
+- [x] Authentication and database-unavailable paths fail closed; unauthenticated `/auth/me` returns 401 and the Studio handles failed verification as unavailable rather than showing a dashboard.
+- [~] The fresh local database is empty, so no eligible creator account exists; creator ownership and populated Studio workflows remain unverified.
+
+### 6. Monetization
+- [x] Existing tests verify no ad provider is fabricated and reconciliation remains unavailable without verified allocation data.
+- [~] Live provider configuration, wallet accounting, and settlement remain unverified.
+
+### 7. Mobile Apps
+- [ ] Native mobile applications remain unimplemented.
+
+### 8. Security & Production
+- [x] API and worker local-only endpoint guards, missing-storage reporting, private raw/public media bucket defaults, and sanitized service errors have focused tests.
+- [~] The local API still emits the existing development JWT fallback warning when `JWT_SECRET` is unset; production configuration and external services were not accessed.
+
+### Local dependency readiness
+- PostgreSQL 18 listens on port 5432. A read-only Prisma status check against `127.0.0.1:5432/watchtube` found all three migrations applied and the schema current. The root `.env` was not read or modified; no production database was contacted.
+- Historical backup evidence still has a zero-versus-one-row discrepancy; it does not affect this empty fresh database, but must be reconciled before any backup restore.
+- Memurai Developer 4.1.2 is running on `127.0.0.1:6379` and responds `PONG`. Its firewall-rule and PATH modifications were disabled during installation; the API reports Redis connected. Redis is required for upload processing and the worker, not basic feeds/auth/viewing.
+- Before the November 19 R2 task, package-local launchers could report R2 as missing because the variables existed only in the root `.env`. After the root fallback fix, direct and proxied `/ready` report storage configured; R2 credentials, bucket permissions, and public-domain delivery remain unverified and no R2 service was contacted.
+- The API needs raw-bucket object read/write/list and public-bucket write/list/delete access; the worker needs raw-bucket read/write only. No R2 service was contacted.
+- The explicitly approved `20261119140000_creator_upload_workflow` migration is applied locally alongside `20261109070000_baseline_legacy_user` and `20261109082031_init_preserve_legacy_user`; Prisma reports the schema up to date.
+
+---
+
+## 13. R2 Storage and Video Upload Reliability — November 19, 2026
+
+This section distinguishes configuration verification from live R2 operations. It does not claim bucket or credential access was verified through Cloudflare.
+
+### 1. Foundation
+- [x] API, worker, and production-style startup scripts load an existing package-local `.env` first and fall back to the monorepo root `.env` without overriding process environment values.
+- [x] The original R2 readiness failure was caused by package-local launchers reading `apps/api/.env` or `apps/worker/.env` while R2 variables existed in the root `.env`.
+- [x] Live direct and Vite-proxied `/ready` checks now report database connected, Redis connected, and storage configured. This verifies variable presence and local syntax/validation only.
+
+### 2. Video Ingestion
+- [x] R2 bucket defaults remain `watchtube-raw-uploads` and `watchtube-media-public`; neither bucket is created, renamed, or replaced.
+- [x] Storage validation rejects placeholders, malformed account IDs, malformed bucket names, invalid public-media URLs, and missing credentials without exposing values.
+- [x] Signed raw-video upload generation is covered by a 15-minute URL test that uses fake credentials and makes no R2 request.
+- [x] Upload intent, URL renewal, metadata/size/content-type verification, queue timeout, owner checks, idempotent verification, retry, thumbnail confirmation, publication gating, and partial-publication cleanup have focused tests.
+- [~] The worker downloads raw objects, transcodes locally, uploads private processing artifacts, preserves a creator-selected thumbnail, and transitions only a video still in `PROCESSING`; live R2/FFmpeg processing is not yet verified.
+- [ ] Live existence and permissions for `watchtube-raw-uploads` and `watchtube-media-public`, signed-upload transfer, raw-object download, public-bucket publication, public URL delivery, and end-to-end upload/transcoding.
+
+### 3. Viewer Experience
+- [x] The upload modal reports progress, cancel, retry-upload, retry-processing, and truthful API/storage/queue failures. Upload progress and retry workflows pass focused web tests.
+- [~] Live media playback and public-media delivery remain unverified because no R2 network operation or public object was created.
+
+### 4. Creator Studio
+- [x] Upload, thumbnail, owner, processing-retry, copyright, and publication routes remain authorization-gated and fail closed.
+- [~] An actual creator account and live R2 round trip remain unverified.
+
+### 5. Monetization
+- [x] No storage change introduces fabricated revenue, ad providers, views, or activity.
+
+### 6. Mobile Apps
+- [ ] Native mobile applications remain unimplemented.
+
+### 7. Security & Production
+- [x] `.env` values are not copied or printed. Package-local configuration retains precedence over root fallback; shell/process environment variables retain precedence through Node env loading.
+- [x] No migration or database write was performed for this task. No R2, production database, or external storage request was made.
+- [ ] Live R2 credential authorization, bucket policy verification, public delivery authorization, and real production-style upload test remain blocked until explicitly authorized.
+
+### Storage verification commands and results
+- API tests: `85/85` passed, including storage validation and signed upload URL generation without R2 network access.
+- Worker tests: `13/13` passed, including thumbnail preservation and terminal failure transitions.
+- Web tests: `15/15` passed, including upload progress, cancellation/retry, and API availability behavior.
+- API build: passed.
+- Worker build: passed.
+- Web build: passed with the existing large-bundle warning.
+- Web lint: exit 0 with six React Compiler warnings.
+- `git diff --check`: passed.
+- Direct and proxied `/ready`: returned `ready`, database connected, Redis connected, storage configured.
+
+### Remaining storage blockers
+- No live R2 API request was made. This has not verified the R2 account credentials, bucket existence, bucket policies, object read/write/list/delete permissions, or public-media access.
+- FFmpeg availability and a real raw-object download/transcode/publication round trip remain unverified.
+- The existing end-to-end test must use an authorized local/verified R2 account and isolated object keys. It must not use production as a substitute for local readiness.
+- The fresh local database was created and migrations applied only after explicit approval. No production database or R2 service was contacted.
+
+---
+
+## 14. Viewer Experience and Video Playback — November 19, 2026
+
+This section records implementation and verification without claiming a live browser or live-media playback result.
+
+### 1. Foundation
+- [x] Existing HLS player, public watch routes, watch analytics, comments, subscriptions, search, trending, and channel pages were preserved and inspected.
+- [x] API and web builds compile after viewer changes.
+
+### 2. Video Ingestion
+- [~] Published processed HLS media can be represented by `playlistUrl` variants, but live R2, FFmpeg, transcoding, and public object delivery remain unverified.
+
+### 3. Viewer Experience
+- [x] Public watch lookup remains limited to ready/published public or unlisted videos.
+- [x] Discovery, search, trending, and related-home feeds use public-only video filters; private and unlisted records are excluded from discovery.
+- [x] The player includes HLS/native-HLS support, buffering/error/retry states, seek, play/pause, mute, volume, fullscreen, low-bandwidth mode, resolution selection, keyboard seek/play/mute/fullscreen/volume controls, and playback-speed controls.
+- [x] The watch page includes resume-position lookup, periodic signed-in telemetry, like/dislike controls, channel/subscription actions, comments, replies, share/copy-link, metadata, description, and related-video retry states.
+- [x] Telemetry validates UUID, bounded session IDs, bounded positions/durations, and accepts watch activity only for public or unlisted ready/published videos.
+- [x] Comments and likes reject private/non-ready videos and comments require a top-level parent belonging to the same video.
+- [~] Frontend and API tests pass, but no real-browser or live-database playback session was available.
+- [ ] Live HLS segment delivery, autoplay behavior, actual seek/volume/fullscreen interactions, and media resume in a browser.
+
+### 4. Creator Studio
+- [~] Existing Studio behavior remains intact; live creator, upload, processing, and publication flows remain unverified.
+
+### 5. Monetization
+- [x] Viewer changes add no ad or revenue events; view counting remains database-backed and deduplicated in the existing 30-minute valid-view window.
+
+### 6. Mobile Apps
+- [ ] Native mobile applications remain unimplemented.
+
+### 7. Security & Production
+- [x] Public watch/comments/replies/reactions/history routes fail closed for private or non-ready videos.
+- [x] Recommendations continue to use public discovery queries; unlisted videos are direct-link/public-watch eligible but remain outside public feeds.
+- [x] No fake views, watch history, comments, creators, or recommendations were introduced.
+- [~] Live database privacy, playback, and browser responsiveness need end-to-end verification.
+
+### Viewer verification commands and results
+- API tests: `93/93` passed.
+- Web tests: `18/18` passed.
+- API build: passed.
+- Web build: passed with the existing large-bundle warning.
+- Web lint: exit 0 with existing React Compiler warnings, including the new WatchPage exhaustive-deps warning and existing player effect warning.
+- `git diff --check`: run as final verification.
+- Browser smoke: Home showed the genuine empty-state, Trending showed the genuine empty trending-state, Subscriptions showed the signed-out state, and Creator Studio showed the signed-in-required state.
+- No browser-shared authenticated session or real published playable video was available.
+
+### Remaining viewer blockers
+- No browser was shared and no real playable local media URL was available.
+- Live R2, FFmpeg, a real published video, genuine authenticated watch history, and browser/E2E playback remain blocked.
+- No migration, database write, seed, R2 change, production request, commit, or push was performed for this viewer task.
+
+---
+
+## 15. Creator Studio, Monetization, and Administration Review
+
+This follow-up preserves the existing upload, thumbnail, copyright declaration, processing, Trending/Search, and Subscriptions work. Verification below is mocked API/UI-contract testing plus local builds; it is not live-database, browser, advertising-provider, or payment-provider verification.
+
+### Creator Studio
+- [~] Studio analytics now select an owned channel, validate a date range of up to 366 days, and aggregate recorded valid views/watch duration plus recorded likes/comments by video. The API route is tested with a mocked repository; the Prisma aggregation has not been run against the database.
+- [~] The responsive Studio dashboard now exposes channel/date filters, period totals and a per-video breakdown. Response-contract tests and the web build pass; no browser test or live analytics data was used.
+- [~] Existing video editing/status management, channel settings/customization, creator comments management, upload access, and responsive Studio navigation remain present. Focused upload, channel, and comments API tests pass; no populated live creator workflow was run.
+- [~] Monetization application selection now supports each owned channel. Channel ownership is checked by the route, but persistent multi-channel application behavior has only mocked API coverage.
+
+### Monetization
+- [~] Removed the hardcoded 1,000-subscriber/4,000-watch-hour/zero-strike application gate. Any authenticated creator channel may apply for manual review; the mocked route test covers a channel with zero subscribers and zero watch hours.
+- [~] A rejected application can be resubmitted immediately, duplicate pending/approved submissions are rejected, and reapplication clears the latest review note/timestamp. These route behaviors pass mocked tests; no database-backed persistence test was run.
+- [~] Admin WTPP review requires a reason for rejection, accepts only pending applications, and updates the channel monetization flag in the same Prisma transaction. Admin/moderator authorization and route behavior pass tests using a mocked repository; database transaction behavior remains unverified.
+- [~] Ad events and revenue reconciliation remain unavailable without verified provider allocation. Creator/admin pages no longer invent gross revenue, earnings, 50/50 amounts, balances, or successful payouts; page rendering was not browser-tested.
+- [~] New payout requests and escrow settlements are disabled rather than creating unverified financial ledger entries. Payout API behavior has an authenticated mocked test; escrow UI/API behavior was not exercised end-to-end.
+- [ ] Provider fees, invalid-traffic deductions, calculation basis, payout minimum/schedule, and tax treatment still require documented policy decisions.
+- [ ] No genuine ad event/allocation provider, creator earnings-by-video ledger, verified available/pending/paid balances, or Mobile Money payment integration is present.
+
+### Administration and trust
+- [~] WTPP administrator/moderator review now requires a rejection reason and only transitions pending records; copyright claims continue to store reviewer identity/time and block/take down approved videos. API route tests cover WTPP role and decision behavior, but copyright workflows were not newly tested against persistent data.
+- [~] The existing report, copyright, and WTPP queues remain available behind ADMIN/MODERATOR API authorization. No production admin login or browser workflow was exercised.
+- [ ] Generic report/channel/video action audit history, WTPP reviewer identity/history, and durable reapplication history are not supported by the current Prisma schema.
+- [ ] A safe video restoration workflow is not implemented: prior visibility/status and moderation history are not persisted for restoration. Creator/channel moderation actions and reasoned audit records also remain incomplete.
+- [~] Copyright escrow entries can still be viewed, but settlement is disabled until source allocations and an auditable resolution workflow exist.
+
+### Verification and safety
+- [x] API tests: 93/93 passed, including mocked WTPP application/review, admin-role checks, payout unavailability, and Studio analytics date/ownership validation.
+- [x] Web tests: 18/18 passed, including Studio analytics/monetization response validation.
+- [x] API TypeScript build and web TypeScript/production build passed. Web lint exited 0 with existing React Compiler warnings; no new Studio dashboard lint warning remains.
+- [x] No production database/provider/storage operation, migration, `db push`, schema initialization, production write, commit, or push was performed for this follow-up. Existing worktree changes were preserved.
+- [ ] Migration approval is needed before implementing durable admin action/review history and safe video restoration. No migration was created or applied.
+
+### Remaining decisions and risks
+- The documented 50/50 target is retained, but its calculation basis and all deductions/settlement/tax terms remain unresolved; therefore no financial amounts are calculated or displayed.
+- Current `WtppApplication` has one unique row per channel and no reviewer ID/history model. Reapplication necessarily replaces the previous decision note/timestamp; the API currently exposes only the latest review information.
+- Existing report decisions lack resolver identity/reason fields. Copyright claims have reviewer identity/time but no structured reviewer decision reason or restoration snapshot.
+- Storage/R2, video processing, live Prisma query behavior, populated creator data, and end-to-end creator/admin browser workflows remain unverified.

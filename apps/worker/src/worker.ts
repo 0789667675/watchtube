@@ -1,19 +1,48 @@
-import { Worker, Job } from 'bullmq';
+import { Worker, Job, WorkerOptions } from 'bullmq';
 import IORedis from 'ioredis';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { db as prisma } from '@watchtube/database';
-import { downloadRawVideo, uploadPublicFile } from './services/storage.service';
+import {
+    getStorageConfigurationStatus,
+    downloadRawVideo,
+    uploadPrivateProcessingFile,
+} from './services/storage.service';
 import { getVideoMetadata, extractPoster, extractThumbnails, createHLSRendition } from './services/transcode.service';
+import { assertSafeWorkerEndpoints } from './serviceEndpointSafety';
 
-const redisConnection = process.env.REDIS_URL
-    ? new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null })
-    : new IORedis({
-        host: process.env.REDIS_HOST || '127.0.0.1',
-        port: parseInt(process.env.REDIS_PORT || '6379', 10),
-        maxRetriesPerRequest: null,
+export function createRedisConnection(): IORedis {
+    assertSafeWorkerEndpoints({
+        databaseUrl: process.env.DATABASE_URL,
+        redisUrl: process.env.REDIS_URL,
+        redisHost: process.env.REDIS_HOST,
+        nodeEnv: process.env.NODE_ENV,
+        localOnly: process.env.WATCHTUBE_LOCAL_ONLY === '1',
+        allowExternal: process.env.WATCHTUBE_ALLOW_EXTERNAL_SERVICES === '1',
     });
+    return process.env.REDIS_URL
+        ? new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null })
+        : new IORedis({
+            host: process.env.REDIS_HOST || '127.0.0.1',
+            port: parseInt(process.env.REDIS_PORT || '6379', 10),
+            maxRetriesPerRequest: null,
+        });
+}
+
+export function isTerminalAttempt(job: Job): boolean {
+    const attempts = job.opts.attempts ?? 1;
+    return job.attemptsMade + 1 >= attempts;
+}
+
+export function getWorkerOptions(connection: IORedis): WorkerOptions {
+    return {
+        connection,
+        concurrency: 2,
+        lockDuration: 30 * 60 * 1000,
+        maxStalledCount: 1,
+    };
+}
 
 // UUID validation regex (RFC 4122 standard)
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -46,14 +75,24 @@ const TEMP_BASE_DIR = getSafeTempBaseDir();
  */
 export function getPublicDomain(): string {
     const raw = (process.env.R2_PUBLIC_DOMAIN || process.env.R2_BUCKET_PUBLIC_URL || '').trim();
-    // In case multiple space-separated domains or URLs are passed, take the first one and strip protocol/trailing slashes
-    const domain = raw.split(/\s+/)[0].replace(/^https?:\/\//, '').replace(/\/+$/, '');
-    if (!domain) {
-        throw new Error(
-            '[FATAL] Worker configuration error: Neither R2_PUBLIC_DOMAIN nor R2_BUCKET_PUBLIC_URL supplies a valid domain. Cannot generate public media URLs.'
-        );
+    const candidate = raw.split(/\s+/)[0];
+    if (
+        !candidate
+        || /(your[_-]|replace.?with|placeholder|x{4,})/i.test(candidate)
+    ) {
+        throw new Error('[Worker] Configure R2_PUBLIC_DOMAIN or R2_BUCKET_PUBLIC_URL to generate public media URLs.');
     }
-    return domain;
+    let url: URL;
+    try {
+        const httpsCandidate = candidate.replace(/^http:\/\//i, 'https://');
+        url = new URL(httpsCandidate.includes('://') ? httpsCandidate : `https://${httpsCandidate}`);
+    } catch {
+        throw new Error('[Worker] R2_PUBLIC_DOMAIN or R2_BUCKET_PUBLIC_URL must be a valid HTTPS URL.');
+    }
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
+        throw new Error('[Worker] R2_PUBLIC_DOMAIN or R2_BUCKET_PUBLIC_URL must be a valid HTTPS URL.');
+    }
+    return `${url.host}${url.pathname.replace(/\/+$/, '')}`;
 }
 
 const renditions = [
@@ -62,9 +101,57 @@ const renditions = [
     { name: '1080p', resolution: '1920x1080', videoBitrate: '4500k', audioBitrate: '192k', bitrate: 4500000 },
 ];
 
-const worker = new Worker(
-    'video-transcode',
-    async (job: Job) => {
+type VideoReadyTransitionRepository = {
+    updateMany: (args: {
+        where: { id: string; status: 'PROCESSING'; thumbnailStorageKey?: null };
+        data: { status: 'READY_FOR_REVIEW'; thumbnailStorageKey?: string; lowBandwidthReady: true };
+    }) => Promise<{ count: number }>;
+};
+
+export async function markVideoReadyForReview(
+    repository: VideoReadyTransitionRepository,
+    videoId: string,
+    posterStorageKey: string,
+): Promise<void> {
+    const posterApplied = await repository.updateMany({
+        where: { id: videoId, status: 'PROCESSING', thumbnailStorageKey: null },
+        data: {
+            status: 'READY_FOR_REVIEW',
+            thumbnailStorageKey: posterStorageKey,
+            lowBandwidthReady: true,
+        },
+    });
+    if (posterApplied.count === 1) return;
+
+    const retainedThumbnail = await repository.updateMany({
+        where: { id: videoId, status: 'PROCESSING' },
+        data: { status: 'READY_FOR_REVIEW', lowBandwidthReady: true },
+    });
+    if (retainedThumbnail.count !== 1) {
+        throw new Error(`Video ${videoId} could not transition from PROCESSING to READY_FOR_REVIEW`);
+    }
+}
+
+type VideoFailureTransitionRepository = {
+    updateMany: (args: {
+        where: { id: string; status: 'PROCESSING' };
+        data: { status: 'FAILED' };
+    }) => Promise<{ count: number }>;
+};
+
+export async function markVideoFailedIfProcessing(
+    repository: VideoFailureTransitionRepository,
+    videoId: string,
+): Promise<boolean> {
+    const result = await repository.updateMany({
+        where: { id: videoId, status: 'PROCESSING' },
+        data: { status: 'FAILED' },
+    });
+    return result.count === 1;
+}
+
+export function createVideoTranscodeProcessor() {
+    return async (job: Job) => {
         const { videoId, rawStorageKey } = job.data;
 
         // 1. Validate videoId as a UUID before touching filesystem or database
@@ -89,9 +176,6 @@ const worker = new Worker(
         ) {
             throw new Error(`Raw storage key does not match the video owner for ${videoId}`);
         }
-
-        // Validate public domain early to avoid starting work if URL generation cannot succeed
-        const publicDomain = getPublicDomain();
 
         let workDir: string | null = null;
 
@@ -128,16 +212,15 @@ const worker = new Worker(
             await extractThumbnails(rawVideoPath, workDir, timestamps);
 
             console.log(`Uploading poster...`);
-            const posterS3Key = `media/${videoId}/poster.jpg`;
-            await uploadPublicFile(path.join(workDir, 'poster.jpg'), posterS3Key, 'image/jpeg');
-            const posterUrl = `https://${publicDomain}/${posterS3Key}`;
+            const posterStorageKey = `processing/${videoId}/poster.jpg`;
+            await uploadPrivateProcessingFile(path.join(workDir, 'poster.jpg'), posterStorageKey, 'image/jpeg');
 
             console.log(`Uploading preview thumbnails...`);
             const allFiles = await fs.readdir(workDir);
             const thumbnailFiles = allFiles.filter(f => f.startsWith('thumbnail-') && f.endsWith('.jpg'));
             for (const thumb of thumbnailFiles) {
-                const thumbS3Key = `media/${videoId}/${thumb}`;
-                await uploadPublicFile(path.join(workDir, thumb), thumbS3Key, 'image/jpeg');
+                const thumbStorageKey = `processing/${videoId}/${thumb}`;
+                await uploadPrivateProcessingFile(path.join(workDir, thumb), thumbStorageKey, 'image/jpeg');
             }
 
             let masterPlaylist = '#EXTM3U\n#EXT-X-VERSION:3\n';
@@ -153,14 +236,11 @@ const worker = new Worker(
                 const tsFiles = files.filter(f => f.startsWith(rendition.name) && f.endsWith('.ts'));
 
                 for (const tsFile of tsFiles) {
-                    const tsS3Key = `media/${videoId}/${tsFile}`;
-                    await uploadPublicFile(path.join(workDir, tsFile), tsS3Key, 'video/MP2T');
+                    const tsStorageKey = `processing/${videoId}/${tsFile}`;
+                    await uploadPrivateProcessingFile(path.join(workDir, tsFile), tsStorageKey, 'video/MP2T');
                 }
 
-                const m3u8S3Key = `media/${videoId}/${renditionFilename}`;
-                await uploadPublicFile(renditionPath, m3u8S3Key, 'application/vnd.apple.mpegurl');
-
-                const playlistUrl = `https://${publicDomain}/${m3u8S3Key}`;
+                const playlistStorageKey = `processing/${videoId}/${renditionFilename}`;
 
                 await prisma.$transaction(async (transaction) => {
                     await transaction.$queryRaw`
@@ -172,7 +252,7 @@ const worker = new Worker(
                     if (existingVariant) {
                         await transaction.videoVariant.update({
                             where: { id: existingVariant.id },
-                            data: { bitrate: rendition.bitrate, playlistUrl },
+                            data: { bitrate: rendition.bitrate, playlistUrl: playlistStorageKey },
                         });
                     } else {
                         await transaction.videoVariant.create({
@@ -180,7 +260,7 @@ const worker = new Worker(
                                 videoId,
                                 resolution: rendition.name,
                                 bitrate: rendition.bitrate,
-                                playlistUrl,
+                                playlistUrl: playlistStorageKey,
                             },
                         });
                     }
@@ -191,27 +271,33 @@ const worker = new Worker(
 
             const masterPath = path.join(workDir, 'master.m3u8');
             await fs.writeFile(masterPath, masterPlaylist);
-            const masterS3Key = `media/${videoId}/master.m3u8`;
-            await uploadPublicFile(masterPath, masterS3Key, 'application/vnd.apple.mpegurl');
+            const masterStorageKey = `processing/${videoId}/master.m3u8`;
+            await uploadPrivateProcessingFile(
+                masterPath,
+                masterStorageKey,
+                'application/vnd.apple.mpegurl',
+            );
 
-            await prisma.video.update({
-                where: { id: videoId },
-                data: {
-                    status: 'READY',
-                    publishedAt: new Date(),
-                    lowBandwidthReady: true,
-                    thumbnailUrl: posterUrl,
-                }
-            });
+            await markVideoReadyForReview(prisma.video, videoId, posterStorageKey);
 
             console.log(`Job for video ${videoId} completed successfully.`);
 
         } catch (error) {
             console.error(`Error processing video ${videoId}:`, error);
-            await prisma.video.update({
-                where: { id: videoId },
-                data: { status: 'REJECTED' }
-            });
+            if (isTerminalAttempt(job)) {
+                try {
+                    const markedFailed = await markVideoFailedIfProcessing(prisma.video, videoId);
+                    if (!markedFailed) {
+                        console.warn(`Video ${videoId} left PROCESSING before terminal failure; preserving its current status.`);
+                    }
+                } catch (statusError) {
+                    console.error(`Failed to mark video ${videoId} as REJECTED:`, statusError);
+                }
+            } else {
+                console.warn(
+                    `Job for video ${videoId} failed on attempt ${job.attemptsMade + 1}; leaving status PROCESSING for retry`
+                );
+            }
             throw error;
         } finally {
             if (workDir) {
@@ -231,16 +317,74 @@ const worker = new Worker(
                 }
             }
         }
-    },
-    { connection: redisConnection, concurrency: 2 }
-);
+    };
+}
 
-// Graceful Shutdown
-const shutdown = async () => {
+export function createWorker(connection: IORedis): Worker {
+    return new Worker(
+        'video-transcode',
+        createVideoTranscodeProcessor(),
+        getWorkerOptions(connection),
+    );
+}
+
+let activeWorker: Worker | null = null;
+let activeRedisConnection: IORedis | null = null;
+let shuttingDown = false;
+
+export async function shutdownWorker(): Promise<void> {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log('Shutting down worker gracefully...');
-    await worker.close();
-    process.exit(0);
-};
+    if (activeWorker) await activeWorker.close();
+    if (activeRedisConnection) await activeRedisConnection.quit();
+}
 
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+export function startWorker(): void {
+    if (!process.env.DATABASE_URL?.trim()) {
+        console.error('[Worker] DATABASE_URL is required to process video jobs. Configure a local WatchTube database first.');
+        process.exitCode = 1;
+        return;
+    }
+    const storageConfiguration = getStorageConfigurationStatus(false);
+    if (storageConfiguration.missing.length) {
+        console.error(`[Worker] Cloud storage is not fully configured. Missing configuration: ${storageConfiguration.missing.join(', ')}.`);
+        process.exitCode = 1;
+        return;
+    }
+    try {
+        activeRedisConnection = createRedisConnection();
+    } catch (error) {
+        console.error(error instanceof Error ? error.message : '[Worker] Service configuration is invalid.');
+        process.exitCode = 1;
+        return;
+    }
+    let redisFailureLogged = false;
+    activeRedisConnection.on('ready', () => {
+        redisFailureLogged = false;
+        console.log('[Worker] Redis connection established; video processing is available.');
+    });
+    activeRedisConnection.on('error', (error: NodeJS.ErrnoException) => {
+        if (redisFailureLogged) return;
+        redisFailureLogged = true;
+        const code = error.code ? ` (${error.code})` : '';
+        console.error(`[Worker] Redis is unavailable${code}; video processing will resume after reconnection.`);
+    });
+    activeWorker = createWorker(activeRedisConnection);
+    activeWorker.on('error', (error: NodeJS.ErrnoException) => {
+        if (redisFailureLogged) return;
+        redisFailureLogged = true;
+        const code = error.code ? ` (${error.code})` : '';
+        console.error(`[Worker] Queue processing is temporarily unavailable${code}.`);
+    });
+
+    const shutdown = () => {
+        void shutdownWorker().finally(() => process.exit(0));
+    };
+    process.once('SIGTERM', shutdown);
+    process.once('SIGINT', shutdown);
+}
+
+if (require.main === module) {
+    startWorker();
+}

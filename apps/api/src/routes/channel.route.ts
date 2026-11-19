@@ -1,5 +1,6 @@
 import { Request, RequestHandler, Response, Router } from 'express';
 import { z } from 'zod';
+import { sendDatabaseErrorResponse } from '../config/databaseErrors';
 
 interface AuthenticatedRequest extends Request {
   user?: { id: string; role: string };
@@ -79,8 +80,12 @@ function isUniqueConstraintError(error: unknown): boolean {
 }
 
 function sendInternalError(res: Response, error: unknown): void {
-  console.error('Channel settings request failed:', error);
-  res.status(500).json({ error: 'Internal server error' });
+  console.error('Channel settings request failed.');
+  sendDatabaseErrorResponse(
+    res,
+    error,
+    'Channel data is temporarily unavailable because the database is unavailable.',
+  );
 }
 
 export function createChannelRouter(dependencies: ChannelRouteDependencies): Router {

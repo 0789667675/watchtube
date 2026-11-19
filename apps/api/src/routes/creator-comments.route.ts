@@ -1,5 +1,6 @@
 import { Request, RequestHandler, Response, Router } from 'express';
 import { z } from 'zod';
+import { sendDatabaseErrorResponse } from '../config/databaseErrors';
 
 interface AuthenticatedRequest extends Request {
   user?: { id: string; role: string };
@@ -68,8 +69,12 @@ function getUserId(req: Request, res: Response): string | undefined {
 }
 
 function sendInternalError(res: Response, error: unknown): void {
-  console.error('Creator comment moderation request failed:', error);
-  res.status(500).json({ error: 'Internal server error' });
+  console.error('Creator comment moderation request failed.');
+  sendDatabaseErrorResponse(
+    res,
+    error,
+    'Creator comments are temporarily unavailable because the database is unavailable.',
+  );
 }
 
 export function createCreatorCommentsRouter(
@@ -109,7 +114,7 @@ export function createCreatorCommentsRouter(
           page: query.data.page,
           limit: query.data.limit,
           total,
-          totalPages: Math.max(1, Math.ceil(total / query.data.limit)),
+          totalPages: Math.ceil(total / query.data.limit),
         });
       } catch (error) {
         sendInternalError(res, error);

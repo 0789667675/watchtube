@@ -154,6 +154,15 @@ async function remove(baseUrl, path, userId = USER_ID) {
     const invalidPage = await get(harness.baseUrl, `/channels/${CHANNEL_ID}/comments?page=0`);
     strict_1.default.equal(invalidPage.status, 400);
 });
+(0, node_test_1.test)('an empty comment result reports zero pages', async () => {
+    const harness = await createHarness();
+    const response = await get(harness.baseUrl, `/channels/${CHANNEL_ID}/comments?search=no-matching-comments`);
+    const body = await response.json();
+    strict_1.default.equal(response.status, 200);
+    strict_1.default.deepEqual(body.comments, []);
+    strict_1.default.equal(body.total, 0);
+    strict_1.default.equal(body.totalPages, 0);
+});
 (0, node_test_1.test)('an owner can permanently delete a comment only within the owned channel', async () => {
     const harness = await createHarness();
     const response = await remove(harness.baseUrl, `/channels/${CHANNEL_ID}/comments/${COMMENT_ONE_ID}`);

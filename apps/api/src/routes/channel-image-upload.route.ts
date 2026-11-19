@@ -7,6 +7,7 @@ import {
   ChannelImagePurpose,
   InvalidChannelImageError,
 } from '../services/channel-image.service';
+import { sendDatabaseErrorResponse } from '../config/databaseErrors';
 
 interface AuthenticatedRequest extends Request {
   user?: { id: string; role: string };
@@ -80,9 +81,13 @@ function getUserId(req: Request, res: Response): string | undefined {
   return userId;
 }
 
-function sendRepositoryError(res: Response): void {
+function sendRepositoryError(res: Response, error: unknown): void {
   console.error('Channel image settings could not be persisted.');
-  res.status(500).json({ error: 'Channel image settings could not be saved.' });
+  sendDatabaseErrorResponse(
+    res,
+    error,
+    'Channel settings are temporarily unavailable because the database is unavailable.',
+  );
 }
 
 function sendStorageError(res: Response): void {
@@ -137,8 +142,8 @@ export function createChannelImageUploadRouter(
       let ownsChannel: boolean;
       try {
         ownsChannel = await dependencies.repository.ownsChannel(channelId, userId);
-      } catch {
-        sendRepositoryError(res);
+      } catch (error) {
+        sendRepositoryError(res, error);
         return;
       }
       if (!ownsChannel) {
@@ -217,8 +222,8 @@ export function createChannelImageUploadRouter(
           res.status(404).json({ error: 'Channel not found.' });
           return;
         }
-      } catch {
-        sendRepositoryError(res);
+      } catch (error) {
+        sendRepositoryError(res, error);
         return;
       }
 
@@ -257,8 +262,8 @@ export function createChannelImageUploadRouter(
           return;
         }
         res.status(200).json({ channel, imageUrl });
-      } catch {
-        sendRepositoryError(res);
+      } catch (error) {
+        sendRepositoryError(res, error);
       }
     },
   );

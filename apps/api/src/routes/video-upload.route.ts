@@ -1,22 +1,48 @@
 import { randomUUID } from 'crypto';
 import { Request, RequestHandler, Response, Router } from 'express';
 import { z } from 'zod';
+import { sendDatabaseErrorResponse } from '../config/databaseErrors';
+import { InvalidChannelImageError } from '../services/channel-image.service';
+import { StorageUnavailableError } from '../services/storage.service';
 
 const MAX_UPLOAD_SIZE = 2 * 1024 * 1024 * 1024;
+const MAX_TAGS = 20;
 const UPLOAD_URL_TTL_SECONDS = 15 * 60;
+const QUEUE_ADD_TIMEOUT_MS = 5000;
 const ALLOWED_CONTENT_TYPES = ['video/mp4', 'video/webm', 'video/quicktime'] as const;
 const uploadKeyPattern = /^uploads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const uploadIntentSchema = z.object({
+const categories = [
+  'FILM_ANIMATION', 'AUTOS_VEHICLES', 'MUSIC', 'PETS_ANIMALS', 'SPORTS',
+  'TRAVEL_EVENTS', 'GAMING', 'PEOPLE_BLOGS', 'COMEDY', 'ENTERTAINMENT',
+  'NEWS_POLITICS', 'HOWTO_STYLE', 'EDUCATION', 'SCIENCE_TECH',
+  'NONPROFITS_ACTIVISM', 'OTHER',
+] as const;
+const metadataSchema = z.object({
   title: z.string().trim().min(1).max(255),
+  description: z.string().trim().max(5000).nullable().optional(),
+  tags: z.array(z.string().trim().min(1).max(50)).max(MAX_TAGS),
+  category: z.enum(categories),
+  language: z.string().trim().min(2).max(35),
+  madeForKids: z.boolean(),
+  visibility: z.enum(['PUBLIC', 'UNLISTED', 'PRIVATE']),
+  copyrightDeclared: z.boolean(),
+});
+const draftSchema = metadataSchema.extend({ channelId: z.string().uuid() });
+const metadataUpdateSchema = metadataSchema;
+const uploadIntentSchema = z.object({
+  videoId: z.string().uuid(),
   contentType: z.enum(ALLOWED_CONTENT_TYPES),
   fileSize: z.number().int().positive().max(MAX_UPLOAD_SIZE),
-  channelId: z.string().uuid(),
 });
 
 const refreshUploadSchema = uploadIntentSchema.pick({
   contentType: true,
   fileSize: true,
+});
+const thumbnailUploadSchema = z.object({
+  contentType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+  fileSize: z.number().int().positive().max(5 * 1024 * 1024),
 });
 
 interface AuthenticatedRequest extends Request {
@@ -26,10 +52,28 @@ interface AuthenticatedRequest extends Request {
 export interface UploadVideo {
   id: string;
   channelId: string;
-  rawStorageKey: string;
-  status: 'DRAFT' | 'UPLOADING' | 'PROCESSING' | 'READY' | 'REJECTED';
+  rawStorageKey: string | null;
+  processingAttempts: number;
+  status: 'DRAFT' | 'UPLOADING' | 'UPLOADED' | 'PROCESSING' | 'READY_FOR_REVIEW' | 'PUBLISHED' | 'FAILED' | 'BLOCKED' | 'READY' | 'REJECTED';
   thumbnailUrl: string | null;
-  channel: { userId: string };
+  thumbnailStorageKey: string | null;
+  title: string;
+  description: string | null;
+  tags: string[];
+  category: typeof categories[number];
+  language: string;
+  madeForKids: boolean;
+  visibility: 'PUBLIC' | 'UNLISTED' | 'PRIVATE';
+  copyrightDeclared: boolean;
+  copyrightDeclaredAt: Date | null;
+  copyrightDeclaredById: string | null;
+  copyrightReviewStatus: 'NOT_SCANNED' | 'BLOCKED';
+  uploadContentType: string | null;
+  uploadFileSize: bigint | null;
+  pendingThumbnailStorageKey: string | null;
+  pendingThumbnailContentType: string | null;
+  pendingThumbnailFileSize: bigint | null;
+  channel: { userId: string; isMonetized?: boolean };
 }
 
 export interface UploadVideoSummary {
@@ -39,20 +83,61 @@ export interface UploadVideoSummary {
   status: UploadVideo['status'];
   visibility: 'PUBLIC' | 'UNLISTED' | 'PRIVATE';
   thumbnailUrl: string | null;
+  description: string | null;
+  tags: string[];
+  category: typeof categories[number];
+  language: string;
+  madeForKids: boolean;
+  copyrightDeclared: boolean;
+  copyrightReviewStatus: 'NOT_SCANNED' | 'BLOCKED';
   viewsCount: number;
   createdAt: Date;
 }
 
 export interface VideoUploadRepository {
   ownsChannel(channelId: string, userId: string): Promise<boolean>;
-  createVideo(data: {
+  createDraft(data: {
     channelId: string;
     title: string;
-    rawStorageKey: string;
-    status: 'UPLOADING';
+    description: string | null;
+    tags: string[];
+    category: typeof categories[number];
+    language: string;
+    madeForKids: boolean;
+    visibility: 'PUBLIC' | 'UNLISTED' | 'PRIVATE';
+    copyrightDeclared: boolean;
+    copyrightDeclaredById: string | null;
+    copyrightDeclaredAt: Date | null;
   }): Promise<{ id: string }>;
+  updateMetadata(input: {
+    videoId: string;
+    userId: string;
+    metadata: z.infer<typeof metadataSchema>;
+  }): Promise<boolean>;
+  setUploadTarget(input: {
+    videoId: string;
+    userId: string;
+    rawStorageKey: string;
+    contentType: string;
+    fileSize: number;
+  }): Promise<boolean>;
+  setPendingThumbnailUpload(input: {
+    videoId: string;
+    userId: string;
+    key: string;
+    contentType: string;
+    fileSize: number;
+  }): Promise<boolean>;
+  confirmThumbnailUpload(videoId: string, userId: string, storageKey: string): Promise<boolean>;
   findVideo(videoId: string): Promise<UploadVideo | null>;
-  markProcessing(videoId: string): Promise<boolean>;
+  hasBlockingCopyrightClaim(videoId: string): Promise<boolean>;
+  markUploaded(videoId: string): Promise<boolean>;
+  markProcessing(videoId: string): Promise<number | null>;
+  publishVideo(input: {
+    videoId: string;
+    thumbnailUrl?: string;
+    playlistUrls?: Record<string, string>;
+  }): Promise<boolean>;
   listVideos(userId: string): Promise<UploadVideoSummary[]>;
 }
 
@@ -64,6 +149,17 @@ export interface VideoUploadStorage {
     fileKey?: string,
   ): Promise<{ uploadUrl: string; fileKey: string }>;
   inspectObject(key: string): Promise<{ contentLength?: number; contentType?: string } | null>;
+  createThumbnailUploadTarget(videoId: string, contentType: string, fileSize: number): Promise<{
+    uploadUrl: string;
+    storageKey: string;
+    expiresIn: number;
+  }>;
+  normalizeThumbnail(storageKey: string, contentType: string, fileSize: number): Promise<boolean>;
+  publishAssets(
+    videoId: string,
+    selectedThumbnailKey?: string,
+  ): Promise<{ thumbnailUrl: string; playlistUrls: Record<string, string> }>;
+  deletePublishedAssets(videoId: string): Promise<void>;
 }
 
 export interface VideoQueue {
@@ -79,6 +175,7 @@ export interface VideoUploadRouteDependencies {
   repository: VideoUploadRepository;
   storage: VideoUploadStorage;
   queue: VideoQueue;
+  isQueueReady(): boolean;
 }
 
 function getUserId(req: Request, res: Response): string | undefined {
@@ -95,12 +192,59 @@ function isOwnedUploadKey(key: string, userId: string): boolean {
 }
 
 function sendInternalError(res: Response, error: unknown): void {
-  console.error('Video upload request failed:', error);
-  res.status(500).json({ error: 'Internal server error' });
+  console.error('Video upload request failed.');
+  sendDatabaseErrorResponse(res, error, 'Video data is temporarily unavailable because the database is unavailable.');
+}
+
+function sendStorageUnavailable(res: Response, error: unknown): void {
+  const details: { name?: string; code?: string; status?: number } = {};
+  if (typeof error === 'object' && error !== null) {
+    if ('name' in error && typeof error.name === 'string') details.name = error.name.slice(0, 80);
+    if ('Code' in error && typeof error.Code === 'string') details.code = error.Code.slice(0, 80);
+    if ('code' in error && typeof error.code === 'string') details.code = error.code.slice(0, 80);
+    if ('$metadata' in error) {
+      const metadata = error.$metadata;
+      if (typeof metadata === 'object' && metadata !== null && 'httpStatusCode' in metadata) {
+        const status = metadata.httpStatusCode;
+        if (typeof status === 'number') details.status = status;
+      }
+    }
+  }
+  console.error('Video upload storage operation failed.', details);
+  res.status(503).json({ error: 'Cloud storage is not configured or is temporarily unavailable.' });
 }
 
 export function createVideoUploadRouter(dependencies: VideoUploadRouteDependencies): Router {
   const router = Router();
+
+  router.post('/videos/drafts', dependencies.authenticate, async (req: Request, res: Response) => {
+    const userId = getUserId(req, res);
+    if (!userId) return;
+    const parsed = draftSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Invalid video metadata' });
+      return;
+    }
+
+    try {
+      if (!await dependencies.repository.ownsChannel(parsed.data.channelId, userId)) {
+        res.status(404).json({ error: 'Channel not found' });
+        return;
+      }
+      const { channelId, ...metadata } = parsed.data;
+      const video = await dependencies.repository.createDraft({
+        channelId,
+        ...metadata,
+        description: metadata.description || null,
+        tags: [...new Set(metadata.tags.map((tag) => tag.trim()))],
+        copyrightDeclaredById: metadata.copyrightDeclared ? userId : null,
+        copyrightDeclaredAt: metadata.copyrightDeclared ? new Date() : null,
+      });
+      res.status(201).json({ videoId: video.id, status: 'DRAFT' });
+    } catch (error) {
+      sendInternalError(res, error);
+    }
+  });
 
   router.get('/videos/mine', dependencies.authenticate, async (req: Request, res: Response) => {
     const userId = getUserId(req, res);
@@ -108,6 +252,91 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
 
     try {
       res.status(200).json(await dependencies.repository.listVideos(userId));
+    } catch (error) {
+      sendInternalError(res, error);
+    }
+  });
+
+  router.get('/videos/:id([0-9a-fA-F-]+)', dependencies.authenticate, async (req: Request, res: Response) => {
+    const userId = getUserId(req, res);
+    if (!userId) return;
+    const id = z.string().uuid().safeParse(req.params.id);
+    if (!id.success) {
+      res.status(400).json({ error: 'Invalid video id' });
+      return;
+    }
+    try {
+      const video = await dependencies.repository.findVideo(id.data);
+      if (!video || video.channel.userId !== userId) {
+        res.status(404).json({ error: 'Video not found' });
+        return;
+      }
+      res.status(200).json({
+        videoId: video.id,
+        channelId: video.channelId,
+        title: video.title,
+        description: video.description,
+        tags: video.tags,
+        category: video.category,
+        language: video.language,
+        madeForKids: video.madeForKids,
+        visibility: video.visibility,
+        copyrightDeclared: video.copyrightDeclared,
+        copyrightReviewStatus: video.copyrightReviewStatus,
+        status: video.status,
+        thumbnailUrl: video.thumbnailUrl,
+      });
+    } catch (error) {
+      sendInternalError(res, error);
+    }
+  });
+
+  router.patch('/videos/:id', dependencies.authenticate, async (req: Request, res: Response) => {
+    const userId = getUserId(req, res);
+    if (!userId) return;
+    const id = z.string().uuid().safeParse(req.params.id);
+    const parsed = metadataUpdateSchema.safeParse(req.body);
+    if (!id.success || !parsed.success) {
+      res.status(400).json({ error: 'Invalid video metadata' });
+      return;
+    }
+    try {
+      const video = await dependencies.repository.findVideo(id.data);
+      if (!video || video.channel.userId !== userId) {
+        res.status(404).json({ error: 'Video not found' });
+        return;
+      }
+      if (['REJECTED', 'BLOCKED'].includes(video.status)) {
+        res.status(409).json({ error: 'This video cannot be edited or published.' });
+        return;
+      }
+      const updated = await dependencies.repository.updateMetadata({
+        videoId: id.data,
+        userId,
+        metadata: {
+          ...parsed.data,
+          description: parsed.data.description || null,
+          tags: [...new Set(parsed.data.tags.map((tag) => tag.trim()))],
+        },
+      });
+      if (!updated) {
+        res.status(409).json({ error: 'Video metadata changed. Reload and retry.' });
+        return;
+      }
+      if (video.status === 'PUBLISHED' && parsed.data.visibility === 'PRIVATE') {
+        try {
+          await dependencies.storage.deletePublishedAssets(video.id);
+        } catch (error) {
+          console.error('Published media cleanup failed after changing visibility to private.', {
+            name: error instanceof Error ? error.name : 'UnknownError',
+          });
+          res.status(503).json({
+            error: 'Video is private, but public media cleanup is incomplete. Retry the visibility update.',
+          });
+          return;
+        }
+      }
+      res.status(200).json({ videoId: video.id, status: video.status });
     } catch (error) {
       sendInternalError(res, error);
     }
@@ -123,29 +352,51 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
       return;
     }
 
+    const { videoId, contentType, fileSize } = parsed.data;
+    let video: UploadVideo | null = null;
     try {
-      const { title, contentType, fileSize, channelId } = parsed.data;
-      if (!(await dependencies.repository.ownsChannel(channelId, userId))) {
-        res.status(404).json({ error: 'Channel not found' });
-        return;
-      }
+      video = await dependencies.repository.findVideo(videoId);
+    } catch (error) {
+      sendInternalError(res, error);
+      return;
+    }
+    if (!video || video.channel.userId !== userId) {
+      res.status(404).json({ error: 'Video not found' });
+      return;
+    }
+    if (video.status !== 'DRAFT' || video.rawStorageKey) {
+      res.status(409).json({ error: 'This draft is not awaiting a new upload.' });
+      return;
+    }
 
-      const { uploadUrl, fileKey } = await dependencies.storage.createUploadUrl(
+    let uploadTarget: { uploadUrl: string; fileKey: string };
+    try {
+      uploadTarget = await dependencies.storage.createUploadUrl(
         userId,
         contentType,
         fileSize,
         `uploads/${userId}/${randomUUID()}`,
       );
-      const video = await dependencies.repository.createVideo({
-        channelId,
-        title,
-        rawStorageKey: fileKey,
-        status: 'UPLOADING',
-      });
+    } catch (error) {
+      sendStorageUnavailable(res, error);
+      return;
+    }
 
+    try {
+      const started = await dependencies.repository.setUploadTarget({
+        videoId,
+        userId,
+        rawStorageKey: uploadTarget.fileKey,
+        contentType,
+        fileSize,
+      });
+      if (!started) {
+        res.status(409).json({ error: 'This draft is not awaiting a new upload.' });
+        return;
+      }
       res.status(201).json({
-        videoId: video.id,
-        uploadUrl,
+        videoId,
+        uploadUrl: uploadTarget.uploadUrl,
         expiresIn: UPLOAD_URL_TTL_SECONDS,
         status: 'UPLOADING',
       });
@@ -165,18 +416,30 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
       return;
     }
 
+    let video: UploadVideo | null;
     try {
-      const video = await dependencies.repository.findVideo(id.data);
-      if (!video || video.channel.userId !== userId) {
-        res.status(404).json({ error: 'Video not found' });
-        return;
-      }
-      if (video.status !== 'UPLOADING' || !isOwnedUploadKey(video.rawStorageKey, userId)) {
-        res.status(409).json({ error: 'Video is not awaiting an upload' });
-        return;
-      }
+      video = await dependencies.repository.findVideo(id.data);
+    } catch (error) {
+      sendInternalError(res, error);
+      return;
+    }
+    if (!video || video.channel.userId !== userId) {
+      res.status(404).json({ error: 'Video not found' });
+      return;
+    }
+    if (
+      video.status !== 'UPLOADING'
+      || !video.rawStorageKey
+      || !isOwnedUploadKey(video.rawStorageKey, userId)
+      || video.uploadContentType !== parsed.data.contentType
+      || Number(video.uploadFileSize) !== parsed.data.fileSize
+    ) {
+      res.status(409).json({ error: 'Video is not awaiting an upload' });
+      return;
+    }
 
-      const { contentType, fileSize } = parsed.data;
+    const { contentType, fileSize } = parsed.data;
+    try {
       const { uploadUrl } = await dependencies.storage.createUploadUrl(
         userId,
         contentType,
@@ -185,7 +448,7 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
       );
       res.status(200).json({ uploadUrl, expiresIn: UPLOAD_URL_TTL_SECONDS });
     } catch (error) {
-      sendInternalError(res, error);
+      sendStorageUnavailable(res, error);
     }
   });
 
@@ -199,40 +462,60 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
       return;
     }
 
+    let video: UploadVideo | null;
     try {
-      const video = await dependencies.repository.findVideo(id.data);
-      if (!video || video.channel.userId !== userId) {
-        res.status(404).json({ error: 'Video not found' });
+      video = await dependencies.repository.findVideo(id.data);
+    } catch (error) {
+      sendInternalError(res, error);
+      return;
+    }
+    if (!video || video.channel.userId !== userId) {
+      res.status(404).json({ error: 'Video not found' });
+      return;
+    }
+    if (!video.rawStorageKey || !isOwnedUploadKey(video.rawStorageKey, userId)) {
+      res.status(403).json({ error: 'Upload key does not belong to this user' });
+      return;
+    }
+
+    if (video.status === 'UPLOADING' || video.status === 'FAILED') {
+      let uploadedObject: { contentLength?: number; contentType?: string } | null;
+      try {
+        uploadedObject = await dependencies.storage.inspectObject(video.rawStorageKey);
+      } catch (error) {
+        sendStorageUnavailable(res, error);
         return;
       }
-      if (!isOwnedUploadKey(video.rawStorageKey, userId)) {
-        res.status(403).json({ error: 'Upload key does not belong to this user' });
+      if (!uploadedObject) {
+        res.status(409).json({ error: 'Uploaded file was not found. Retry the upload.' });
+        return;
+      }
+      if (
+        !uploadedObject.contentLength
+        || uploadedObject.contentLength > MAX_UPLOAD_SIZE
+        || uploadedObject.contentLength !== Number(video.uploadFileSize)
+        || uploadedObject.contentType !== video.uploadContentType
+        || !ALLOWED_CONTENT_TYPES.some((contentType) => contentType === uploadedObject.contentType)
+      ) {
+        res.status(400).json({ error: 'Uploaded file metadata is invalid' });
         return;
       }
 
-      if (video.status === 'UPLOADING') {
-        const uploadedObject = await dependencies.storage.inspectObject(video.rawStorageKey);
-        if (!uploadedObject) {
-          res.status(409).json({ error: 'Uploaded file was not found. Retry the upload.' });
-          return;
-        }
-        if (
-          !uploadedObject.contentLength ||
-          uploadedObject.contentLength > MAX_UPLOAD_SIZE ||
-          !ALLOWED_CONTENT_TYPES.some((contentType) => contentType === uploadedObject.contentType)
-        ) {
-          res.status(400).json({ error: 'Uploaded file metadata is invalid' });
-          return;
-        }
-
-        const markedProcessing = await dependencies.repository.markProcessing(id.data);
-        if (!markedProcessing) {
+      let markedUploaded: boolean;
+      try {
+        markedUploaded = await dependencies.repository.markUploaded(id.data);
+      } catch (error) {
+        sendInternalError(res, error);
+        return;
+      }
+      if (!markedUploaded) {
+        try {
           const currentVideo = await dependencies.repository.findVideo(id.data);
           if (!currentVideo || currentVideo.channel.userId !== userId) {
             res.status(404).json({ error: 'Video not found' });
             return;
           }
-          if (currentVideo.status !== 'PROCESSING') {
+          if (!['UPLOADED', 'PROCESSING', 'READY_FOR_REVIEW', 'PUBLISHED'].includes(currentVideo.status)) {
             if (currentVideo.status === 'READY') {
               res.status(200).json({ videoId: currentVideo.id, status: currentVideo.status });
               return;
@@ -240,25 +523,260 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
             res.status(409).json({ error: 'Video is no longer awaiting verification' });
             return;
           }
-        }
-      } else if (video.status !== 'PROCESSING') {
-        if (video.status === 'READY') {
-          res.status(200).json({ videoId: video.id, status: video.status });
+          video = currentVideo;
+        } catch (error) {
+          sendInternalError(res, error);
           return;
         }
-        res.status(409).json({ error: 'Video is not awaiting verification' });
+      } else {
+        video = { ...video, status: 'UPLOADED' };
+      }
+    } else if (!['UPLOADED', 'PROCESSING'].includes(video.status)) {
+      if (['READY', 'READY_FOR_REVIEW', 'PUBLISHED'].includes(video.status)) {
+        res.status(200).json({ videoId: video.id, status: video.status });
+        return;
+      }
+      res.status(409).json({ error: 'Video is not awaiting verification' });
+      return;
+    }
+
+    if (video.status === 'UPLOADED') {
+      if (!dependencies.isQueueReady()) {
+        res.status(503).json({ error: 'The video processing queue is unavailable. Retry verification when it reconnects.' });
+        return;
+      }
+      let processingAttempt: number | null;
+      try {
+        processingAttempt = await dependencies.repository.markProcessing(id.data);
+      } catch (error) {
+        sendInternalError(res, error);
+        return;
+      }
+      if (processingAttempt === null) {
+        try {
+          const currentVideo = await dependencies.repository.findVideo(id.data);
+          if (!currentVideo || currentVideo.channel.userId !== userId) {
+            res.status(404).json({ error: 'Video not found' });
+            return;
+          }
+          if (currentVideo.status !== 'PROCESSING') {
+            if (['READY', 'READY_FOR_REVIEW', 'PUBLISHED'].includes(currentVideo.status)) {
+              res.status(200).json({ videoId: currentVideo.id, status: currentVideo.status });
+              return;
+            }
+            res.status(409).json({ error: 'Video is no longer awaiting verification' });
+            return;
+          }
+          video = currentVideo;
+        } catch (error) {
+          sendInternalError(res, error);
+          return;
+        }
+      } else {
+        video = { ...video, status: 'PROCESSING', processingAttempts: processingAttempt };
+      }
+    }
+
+    if (!dependencies.isQueueReady()) {
+      res.status(503).json({ error: 'The video processing queue is unavailable. Retry verification when it reconnects.' });
+      return;
+    }
+    if (!video.rawStorageKey || !isOwnedUploadKey(video.rawStorageKey, userId)) {
+      res.status(403).json({ error: 'Upload key does not belong to this user' });
+      return;
+    }
+    const rawStorageKey = video.rawStorageKey;
+    const jobId = video.processingAttempts <= 1
+      ? video.id
+      : `${video.id}-retry-${video.processingAttempts}`;
+    let queueTimeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        dependencies.queue.add(
+          'processVideo',
+          { videoId: video.id, rawStorageKey },
+          { jobId },
+        ),
+        new Promise<never>((_resolve, reject) => {
+          queueTimeout = setTimeout(() => reject(new Error('Video processing queue timed out')), QUEUE_ADD_TIMEOUT_MS);
+        }),
+      ]);
+      res.status(202).json({ videoId: video.id, status: 'PROCESSING' });
+    } catch (error) {
+      console.error('Video processing queue submission failed.', {
+        name: error instanceof Error ? error.name : 'UnknownError',
+      });
+      res.status(503).json({ error: 'The video processing queue is unavailable. Retry verification when it reconnects.' });
+    } finally {
+      if (queueTimeout) clearTimeout(queueTimeout);
+    }
+  });
+
+  router.post('/videos/:id/thumbnail-upload-intent', dependencies.authenticate, async (req: Request, res: Response) => {
+    const userId = getUserId(req, res);
+    if (!userId) return;
+    const id = z.string().uuid().safeParse(req.params.id);
+    const parsed = thumbnailUploadSchema.safeParse(req.body);
+    if (!id.success || !parsed.success) {
+      res.status(400).json({ error: 'Invalid thumbnail upload metadata' });
+      return;
+    }
+
+    try {
+      const video = await dependencies.repository.findVideo(id.data);
+      if (!video || video.channel.userId !== userId) {
+        res.status(404).json({ error: 'Video not found' });
+        return;
+      }
+      if (['REJECTED', 'BLOCKED'].includes(video.status)) {
+        res.status(409).json({ error: 'This video cannot be edited.' });
+        return;
+      }
+      const target = await dependencies.storage.createThumbnailUploadTarget(
+        video.id,
+        parsed.data.contentType,
+        parsed.data.fileSize,
+      );
+      const saved = await dependencies.repository.setPendingThumbnailUpload({
+        videoId: video.id,
+        userId,
+        key: target.storageKey,
+        contentType: parsed.data.contentType,
+        fileSize: parsed.data.fileSize,
+      });
+      if (!saved) {
+        res.status(409).json({ error: 'Video metadata changed. Retry the thumbnail upload.' });
+        return;
+      }
+      res.status(201).json({ uploadUrl: target.uploadUrl, expiresIn: target.expiresIn });
+    } catch (error) {
+      sendStorageUnavailable(res, error);
+    }
+  });
+
+  router.post('/videos/:id/thumbnail-confirmation', dependencies.authenticate, async (req: Request, res: Response) => {
+    const userId = getUserId(req, res);
+    if (!userId) return;
+    const id = z.string().uuid().safeParse(req.params.id);
+    const parsed = thumbnailUploadSchema.safeParse(req.body);
+    if (!id.success || !parsed.success) {
+      res.status(400).json({ error: 'Invalid thumbnail upload metadata' });
+      return;
+    }
+
+    try {
+      const video = await dependencies.repository.findVideo(id.data);
+      if (!video || video.channel.userId !== userId) {
+        res.status(404).json({ error: 'Video not found' });
+        return;
+      }
+      if (
+        !video.pendingThumbnailStorageKey
+        || video.pendingThumbnailContentType !== parsed.data.contentType
+        || Number(video.pendingThumbnailFileSize) !== parsed.data.fileSize
+      ) {
+        res.status(409).json({ error: 'No matching thumbnail upload is awaiting confirmation.' });
+        return;
+      }
+      const exists = await dependencies.storage.normalizeThumbnail(
+        video.pendingThumbnailStorageKey,
+        parsed.data.contentType,
+        parsed.data.fileSize,
+      );
+      if (!exists) {
+        res.status(409).json({ error: 'Uploaded thumbnail was not found. Retry the upload.' });
+        return;
+      }
+      const saved = await dependencies.repository.confirmThumbnailUpload(
+        video.id,
+        userId,
+        video.pendingThumbnailStorageKey,
+      );
+      if (!saved) {
+        res.status(409).json({ error: 'Video metadata changed. Retry the thumbnail upload.' });
+        return;
+      }
+      res.status(200).json({ videoId: video.id, status: video.status });
+    } catch (error) {
+      if (error instanceof InvalidChannelImageError) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      sendStorageUnavailable(res, error);
+    }
+  });
+
+  router.post('/videos/:id/publish', dependencies.authenticate, async (req: Request, res: Response) => {
+    const userId = getUserId(req, res);
+    if (!userId) return;
+    const id = z.string().uuid().safeParse(req.params.id);
+    if (!id.success) {
+      res.status(400).json({ error: 'Invalid video id' });
+      return;
+    }
+
+    let video: UploadVideo | null = null;
+    try {
+      video = await dependencies.repository.findVideo(id.data);
+      if (!video || video.channel.userId !== userId) {
+        res.status(404).json({ error: 'Video not found' });
+        return;
+      }
+      if (!video.copyrightDeclared || !video.copyrightDeclaredAt || !video.copyrightDeclaredById) {
+        res.status(409).json({ error: 'Declare that you own or have permission to upload this content before publishing.' });
+        return;
+      }
+      if (
+        video.copyrightReviewStatus === 'BLOCKED'
+        || await dependencies.repository.hasBlockingCopyrightClaim(video.id)
+      ) {
+        res.status(409).json({ error: 'Publication is blocked by a verified copyright claim.' });
+        return;
+      }
+      if (!['READY_FOR_REVIEW', 'PUBLISHED'].includes(video.status)) {
+        res.status(409).json({ error: 'Video processing must finish before publication.' });
         return;
       }
 
-      await dependencies.queue.add(
-        'processVideo',
-        { videoId: video.id, rawStorageKey: video.rawStorageKey },
-        { jobId: video.id },
-      );
-      res.status(202).json({ videoId: video.id, status: 'PROCESSING' });
+      let assets: { thumbnailUrl: string; playlistUrls: Record<string, string> } | undefined;
+      if (video.visibility !== 'PRIVATE') {
+        try {
+          assets = await dependencies.storage.publishAssets(video.id, video.thumbnailStorageKey || undefined);
+        } catch (error) {
+          sendStorageUnavailable(res, error);
+          return;
+        }
+      }
+      const published = await dependencies.repository.publishVideo({
+        videoId: video.id,
+        thumbnailUrl: assets?.thumbnailUrl,
+        playlistUrls: assets?.playlistUrls,
+      });
+      if (!published) {
+        if (assets) await dependencies.storage.deletePublishedAssets(video.id);
+        res.status(409).json({ error: 'Video could not be published. Reload and retry.' });
+        return;
+      }
+      res.status(200).json({
+        videoId: video.id,
+        status: 'PUBLISHED',
+        copyrightReviewStatus: video.copyrightReviewStatus,
+      });
     } catch (error) {
-      console.error('Video upload verification failed:', error);
-      res.status(503).json({ error: 'Upload verification or processing queue is temporarily unavailable' });
+      if (error instanceof StorageUnavailableError) {
+        sendStorageUnavailable(res, error);
+        return;
+      }
+      if (video && video.status === 'READY_FOR_REVIEW' && video.visibility !== 'PRIVATE') {
+        try {
+          await dependencies.storage.deletePublishedAssets(video.id);
+        } catch (cleanupError) {
+          console.error('Failed to clean up video assets after publication failed.', {
+            name: cleanupError instanceof Error ? cleanupError.name : 'UnknownError',
+          });
+        }
+      }
+      sendInternalError(res, error);
     }
   });
 
@@ -282,6 +800,7 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
         videoId: video.id,
         status: video.status,
         thumbnailUrl: video.thumbnailUrl,
+        copyrightReviewStatus: video.copyrightReviewStatus,
       });
     } catch (error) {
       sendInternalError(res, error);

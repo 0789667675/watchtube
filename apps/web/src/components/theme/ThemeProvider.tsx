@@ -7,6 +7,11 @@ export interface ThemeContextValue {
   toggleTheme: () => void;
 }
 
+const THEME_COLORS: Record<Theme, string> = {
+  light: '#F4F7FB',
+  dark: '#000000',
+};
+
 export const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
 interface ThemeProviderProps {
@@ -26,13 +31,25 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   }, []);
 
   useEffect(() => {
+    const colorScheme = window.matchMedia('(prefers-color-scheme: dark)');
+    const syncSystemTheme = (event: MediaQueryListEvent) => {
+      if (!hasUserPreference) {
+        setTheme(event.matches ? 'dark' : 'light');
+      }
+    };
+
+    colorScheme.addEventListener('change', syncSystemTheme);
+    return () => colorScheme.removeEventListener('change', syncSystemTheme);
+  }, [hasUserPreference]);
+
+  useEffect(() => {
     const root = document.documentElement;
     root.classList.toggle('dark', theme === 'dark');
     root.dataset.theme = theme;
     root.dataset.themePreference = hasUserPreference ? 'user' : 'system';
     document
       .querySelector<HTMLMetaElement>('meta[name="theme-color"]')
-      ?.setAttribute('content', theme === 'dark' ? '#000000' : '#F4F7FB');
+      ?.setAttribute('content', THEME_COLORS[theme]);
 
     if (hasUserPreference) {
       try {

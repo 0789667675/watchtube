@@ -53,3 +53,13 @@ async function createPng(width, height) {
     await strict_1.default.rejects((0, channel_image_service_1.processChannelImage)(await createPng(48, 48), 'avatar', 'image/png'), channel_image_service_1.InvalidChannelImageError);
     await strict_1.default.rejects((0, channel_image_service_1.processChannelImage)(await createPng(800, 400), 'banner', 'image/png'), channel_image_service_1.InvalidChannelImageError);
 });
+(0, node_test_1.test)('video thumbnails validate their image bytes and normalize to a 1280 by 720 WebP', async () => {
+    const output = await (0, channel_image_service_1.processVideoThumbnail)(await createPng(640, 480), 'image/png');
+    const metadata = await (0, sharp_1.default)(output).metadata();
+    strict_1.default.equal(metadata.format, 'webp');
+    strict_1.default.equal(metadata.width, 1280);
+    strict_1.default.equal(metadata.height, 720);
+    await strict_1.default.rejects((0, channel_image_service_1.processVideoThumbnail)(Buffer.from('not an image'), 'image/png'), channel_image_service_1.InvalidChannelImageError);
+    await strict_1.default.rejects((0, channel_image_service_1.processVideoThumbnail)(await createPng(100, 100), 'image/png'), channel_image_service_1.InvalidChannelImageError);
+    await strict_1.default.rejects((0, channel_image_service_1.processVideoThumbnail)(await createPng(640, 480), 'image/jpeg'), channel_image_service_1.InvalidChannelImageError);
+});

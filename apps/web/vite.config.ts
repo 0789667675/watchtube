@@ -17,11 +17,26 @@ export default defineConfig(({ mode }) => {
     return values
   }
 
+  const readLocalApiPort = () => {
+    let apiPort: string | undefined
+    for (const filename of ['.env', '.env.local', `.env.${mode}`, `.env.${mode}.local`]) {
+      const path = resolve(monorepoRoot, 'apps/api', filename)
+      if (!existsSync(path)) continue
+      for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+        const match = /^\s*API_PORT\s*=\s*['"]?(\d+)['"]?\s*(?:#.*)?$/.exec(line)
+        if (match) apiPort = match[1]
+      }
+    }
+    return apiPort
+  }
+
   const apiEnv = localOnly ? {} : readRuntimeEnv(resolve(monorepoRoot, 'apps/api'))
   const webEnv = localOnly ? {} : readRuntimeEnv(process.cwd())
-  const apiPort = process.env.PORT || apiEnv.PORT || '3001'
+  const apiPort = localOnly
+    ? process.env.API_PORT || readLocalApiPort() || '3001'
+    : process.env.API_PORT || process.env.PORT || apiEnv.API_PORT || apiEnv.PORT || '3001'
   if (!/^\d+$/.test(apiPort) || Number(apiPort) < 1 || Number(apiPort) > 65535) {
-    throw new Error('API PORT must be an integer between 1 and 65535.')
+    throw new Error('API_PORT must be an integer between 1 and 65535.')
   }
   const proxyTarget = localOnly
     ? `http://127.0.0.1:${apiPort}`
@@ -48,6 +63,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    ...(localOnly ? { define: { 'import.meta.env.VITE_API_BASE_URL': '""' } } : {}),
     server: {
       proxy: {
         '/api': {

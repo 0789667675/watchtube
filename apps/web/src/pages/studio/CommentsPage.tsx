@@ -186,6 +186,21 @@ export function CommentsPage() {
         >
           Search
         </button>
+        {search && (
+          <button
+            type="button"
+            onClick={() => {
+              setSearchInput('');
+              setSearch('');
+              setPage(1);
+              setRefreshKey((current) => current + 1);
+            }}
+            disabled={Boolean(deletingCommentId)}
+            className="rounded-control border border-border px-4 py-2.5 text-sm font-semibold hover:bg-surface-hover disabled:opacity-50"
+          >
+            Clear
+          </button>
+        )}
       </form>
 
       {notice && <p role="status" className="rounded-control border border-border bg-surface-light p-3 text-sm dark:bg-surface-dark">{notice}</p>}
@@ -249,7 +264,12 @@ export function CommentsPage() {
                         </time>
                         {comment.parentId && <span className="rounded-full bg-surface-subtle px-2 py-0.5 text-xs text-text-muted">Reply</span>}
                       </div>
-                      <p className="mt-1 text-xs text-text-muted">On: {comment.video.title}</p>
+                      <Link
+                        to={`/watch/${encodeURIComponent(comment.video.id)}?from=studio&tab=comments`}
+                        className="mt-1 block text-xs text-text-muted hover:text-brand-dark hover:underline"
+                      >
+                        On: {comment.video.title}
+                      </Link>
                       <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6">{comment.content}</p>
                     </div>
                   </div>

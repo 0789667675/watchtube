@@ -4,6 +4,7 @@ import sharp from 'sharp';
 import {
   InvalidChannelImageError,
   processChannelImage,
+  processVideoThumbnail,
 } from '../src/services/channel-image.service';
 
 async function createPng(width: number, height: number): Promise<Buffer> {
@@ -71,4 +72,16 @@ test('image processing rejects unsupported, mislabeled, malformed, and undersize
     processChannelImage(await createPng(800, 400), 'banner', 'image/png'),
     InvalidChannelImageError,
   );
+});
+
+test('video thumbnails validate their image bytes and normalize to a 1280 by 720 WebP', async () => {
+  const output = await processVideoThumbnail(await createPng(640, 480), 'image/png');
+  const metadata = await sharp(output).metadata();
+  assert.equal(metadata.format, 'webp');
+  assert.equal(metadata.width, 1280);
+  assert.equal(metadata.height, 720);
+
+  await assert.rejects(processVideoThumbnail(Buffer.from('not an image'), 'image/png'), InvalidChannelImageError);
+  await assert.rejects(processVideoThumbnail(await createPng(100, 100), 'image/png'), InvalidChannelImageError);
+  await assert.rejects(processVideoThumbnail(await createPng(640, 480), 'image/jpeg'), InvalidChannelImageError);
 });

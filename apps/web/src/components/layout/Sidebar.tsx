@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 
 interface SidebarProps {
   onNavigate?: () => void;
+  autoFocusFirst?: boolean;
 }
 
 const links = [
@@ -11,18 +12,19 @@ const links = [
   { to: '/feed/subscriptions', label: 'Subscriptions', icon: Video },
 ];
 
-export function Sidebar({ onNavigate }: SidebarProps) {
+export function Sidebar({ onNavigate, autoFocusFirst = false }: SidebarProps) {
   return (
-    <nav aria-label="Main navigation" className="h-full w-64 border-r border-border bg-canvas-light p-4 dark:bg-canvas-obsidian">
+    <nav aria-label="Main navigation" className="h-full w-64 overflow-y-auto overscroll-contain border-r border-border bg-canvas-light p-4 dark:bg-canvas-obsidian">
       <div className="space-y-1">
-        {links.map(({ to, label, icon: Icon, end }) => (
+        {links.map(({ to, label, icon: Icon, end }, index) => (
           <NavLink
             key={to}
             to={to}
             end={end}
             onClick={onNavigate}
+            autoFocus={autoFocusFirst && index === 0}
             className={({ isActive }) =>
-              `flex items-center gap-4 rounded-control px-4 py-3 text-sm font-medium transition ${
+              `flex min-h-11 items-center gap-4 rounded-control px-4 py-3 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus ${
                 isActive
                   ? 'bg-surface-subtle text-brand-dark'
                   : 'text-text-primary hover:bg-surface-hover'
@@ -41,7 +43,7 @@ export function Sidebar({ onNavigate }: SidebarProps) {
         to="/studio"
         onClick={onNavigate}
         className={({ isActive }) =>
-          `flex items-center gap-4 rounded-control px-4 py-3 text-sm font-medium transition ${
+          `flex min-h-11 items-center gap-4 rounded-control px-4 py-3 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus ${
             isActive ? 'bg-surface-subtle text-brand-dark' : 'text-text-primary hover:bg-surface-hover'
           }`
         }

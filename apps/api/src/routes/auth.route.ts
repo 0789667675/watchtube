@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { db as prisma } from '@watchtube/database';
 import { authenticate, AuthRequest } from '../middleware/auth';
+import { sendDatabaseErrorResponse } from '../config/databaseErrors';
 
 const authRouter = express.Router();
 import { JWT_SECRET } from '../config/jwt';
@@ -30,7 +31,15 @@ authRouter.post('/register', async (req: Request, res: Response) => {
 
     res.status(201).json({ id: user.id, email: user.email });
   } catch (error) {
-    res.status(400).json({ error: 'Invalid request' });
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Invalid request' });
+      return;
+    }
+    sendDatabaseErrorResponse(
+      res,
+      error,
+      'Registration is temporarily unavailable because the database is unavailable.',
+    );
   }
 });
 
@@ -44,7 +53,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
       return;
     }
 
-    const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: '7d' });
 
     res.cookie('token', token, {
       httpOnly: true,
@@ -55,7 +64,15 @@ authRouter.post('/login', async (req: Request, res: Response) => {
 
     res.status(200).json({ success: true });
   } catch (error) {
-    res.status(400).json({ error: 'Invalid request' });
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Invalid request' });
+      return;
+    }
+    sendDatabaseErrorResponse(
+      res,
+      error,
+      'Sign-in is temporarily unavailable because the database is unavailable.',
+    );
   }
 });
 
@@ -76,7 +93,11 @@ authRouter.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
     });
     res.status(200).json(user);
   } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
+    sendDatabaseErrorResponse(
+      res,
+      error,
+      'Account details are temporarily unavailable because the database is unavailable.',
+    );
   }
 });
 

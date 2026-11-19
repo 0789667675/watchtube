@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.createCreatorCommentsRouter = createCreatorCommentsRouter;
 const express_1 = require("express");
 const zod_1 = require("zod");
+const databaseErrors_1 = require("../config/databaseErrors");
 const listQuerySchema = zod_1.z.object({
     page: zod_1.z.coerce.number().int().min(1).max(1_000_000).default(1),
     limit: zod_1.z.coerce.number().int().min(1).max(50).default(20),
@@ -17,8 +18,8 @@ function getUserId(req, res) {
     return userId;
 }
 function sendInternalError(res, error) {
-    console.error('Creator comment moderation request failed:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Creator comment moderation request failed.');
+    (0, databaseErrors_1.sendDatabaseErrorResponse)(res, error, 'Creator comments are temporarily unavailable because the database is unavailable.');
 }
 function createCreatorCommentsRouter(dependencies) {
     const router = (0, express_1.Router)();
@@ -49,7 +50,7 @@ function createCreatorCommentsRouter(dependencies) {
                 page: query.data.page,
                 limit: query.data.limit,
                 total,
-                totalPages: Math.max(1, Math.ceil(total / query.data.limit)),
+                totalPages: Math.ceil(total / query.data.limit),
             });
         }
         catch (error) {

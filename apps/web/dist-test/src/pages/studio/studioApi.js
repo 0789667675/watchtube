@@ -2,6 +2,15 @@ export const STUDIO_CHANNEL_IMAGE_MAX_FILE_SIZE = {
     avatar: 5 * 1024 * 1024,
     banner: 10 * 1024 * 1024,
 };
+export function isStudioChannel(value) {
+    return isRecord(value)
+        && typeof value.id === 'string'
+        && typeof value.name === 'string'
+        && typeof value.handle === 'string'
+        && (value.description === undefined || value.description === null || typeof value.description === 'string')
+        && (value.avatarUrl === undefined || value.avatarUrl === null || typeof value.avatarUrl === 'string')
+        && (value.bannerUrl === undefined || value.bannerUrl === null || typeof value.bannerUrl === 'string');
+}
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -92,6 +101,11 @@ function isNonNegativeInteger(value) {
 }
 export function isStudioAnalytics(value) {
     return isRecord(value)
+        && isRecord(value.period)
+        && typeof value.period.from === 'string'
+        && Number.isFinite(Date.parse(value.period.from))
+        && typeof value.period.to === 'string'
+        && Number.isFinite(Date.parse(value.period.to))
         && isNonNegativeInteger(value.subscriberCount)
         && isNonNegativeInteger(value.totalViews)
         && isNonNegativeNumber(value.totalWatchHours)
@@ -99,7 +113,8 @@ export function isStudioAnalytics(value) {
         && value.recentPerformance.every((video) => isRecord(video)
             && typeof video.id === 'string'
             && typeof video.title === 'string'
-            && isNonNegativeInteger(video.viewsCount)
+            && isNonNegativeInteger(video.views)
+            && isNonNegativeNumber(video.watchHours)
             && isRecord(video._count)
             && isNonNegativeInteger(video._count.likes)
             && isNonNegativeInteger(video._count.comments));
@@ -123,12 +138,16 @@ export function isStudioLedger(value) {
 }
 export function isStudioMonetizationStatus(value) {
     return isRecord(value)
-        && isNonNegativeInteger(value.subscriberCount)
-        && isNonNegativeNumber(value.totalWatchHours)
-        && isNonNegativeInteger(value.activeStrikes)
+        && typeof value.channelId === 'string'
+        && typeof value.channelName === 'string'
+        && typeof value.channelHandle === 'string'
         && typeof value.isMonetized === 'boolean'
         && (value.applicationStatus === 'PENDING'
+            || value.applicationStatus === 'APPROVED'
             || value.applicationStatus === 'REJECTED'
             || value.applicationStatus === 'NOT_APPLIED')
-        && typeof value.isEligible === 'boolean';
+        && typeof value.canApply === 'boolean'
+        && (value.reviewerNotes === null || typeof value.reviewerNotes === 'string')
+        && (value.reviewedAt === null
+            || (typeof value.reviewedAt === 'string' && Number.isFinite(Date.parse(value.reviewedAt))));
 }

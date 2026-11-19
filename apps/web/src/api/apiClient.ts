@@ -11,6 +11,13 @@ export function getApiErrorMessage(error: unknown, fallback: string): string {
   if (axios.isAxiosError<{ error?: unknown }>(error)) {
     const message = error.response?.data?.error;
     if (typeof message === 'string') return message;
+    if (
+      error.response?.status === 502
+      || error.response?.status === 504
+      || error.code === 'ERR_NETWORK'
+    ) {
+      return 'The WatchTube API could not be reached. Check the API service connection, then retry.';
+    }
   }
   return fallback;
 }

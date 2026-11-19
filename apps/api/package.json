@@ -5,10 +5,10 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/tests/video-upload.route.test.js dist-test/tests/creator-comments.route.test.js dist-test/tests/channel.route.test.js dist-test/tests/channel-image-upload.route.test.js dist-test/tests/channel-image-storage.test.js dist-test/tests/channel-image-validation.test.js dist-test/tests/service-endpoint-safety.test.js",
-    "dev": "node --env-file-if-exists=.env scripts/dev-local.cjs",
-    "dev:api": "node --env-file-if-exists=.env scripts/dev-local.cjs",
-    "start": "node --env-file-if-exists=.env dist/index.js"
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/tests/auth.middleware.test.js dist-test/tests/public-content-access.test.js dist-test/tests/monetization.route.test.js dist-test/tests/video-upload.route.test.js dist-test/tests/creator-comments.route.test.js dist-test/tests/channel.route.test.js dist-test/tests/channel-image-upload.route.test.js dist-test/tests/channel-image-storage.test.js dist-test/tests/channel-image-validation.test.js dist-test/tests/service-endpoint-safety.test.js dist-test/tests/viewer-feed.test.js dist-test/tests/health.route.test.js dist-test/tests/storage-readiness.test.js dist-test/tests/wtpp-application.route.test.js dist-test/tests/wtpp-review.route.test.js dist-test/tests/wallet-payout.route.test.js dist-test/tests/studio.route.test.js",
+    "dev": "node scripts/dev-local.cjs",
+    "dev:api": "node scripts/dev-local.cjs",
+    "start": "node scripts/start.cjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.0.0",

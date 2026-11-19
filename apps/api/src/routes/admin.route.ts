@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { db as prisma } from '@watchtube/database';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { requireAdmin } from '../middleware/admin';
+import { deletePublishedVideoAssets } from '../services/storage.service';
+import { createWtppReviewRouter } from './wtpp-review.route';
 
 const adminRouter = express.Router();
 
@@ -73,40 +75,40 @@ adminRouter.get('/wtpp/applications', async (req: Request, res: Response) => {
   }
 });
 
-const wtppPatchSchema = z.object({
-  status: z.enum(['APPROVED', 'REJECTED']),
-  reviewerNotes: z.string().optional()
-});
-
-adminRouter.patch('/wtpp/applications/:id', async (req: Request, res: Response) => {
-  try {
-    const appId = req.params.id;
-    const { status, reviewerNotes } = wtppPatchSchema.parse(req.body);
-
-    const application = await prisma.wtppApplication.update({
-      where: { id: appId },
-      data: { status, reviewerNotes, reviewedAt: new Date() }
-    });
-
-    if (status === 'APPROVED') {
-      await prisma.channel.update({
-        where: { id: application.channelId },
-        data: { isMonetized: true }
+adminRouter.use('/wtpp/applications', createWtppReviewRouter({
+  async reviewPendingApplication({ applicationId, status, reviewerNotes }) {
+    return prisma.$transaction(async (transaction) => {
+      const reviewedAt = new Date();
+      const updated = await transaction.wtppApplication.updateMany({
+        where: { id: applicationId, status: 'PENDING' },
+        data: { status, reviewerNotes, reviewedAt },
       });
-    }
+      if (updated.count !== 1) return null;
 
-    res.status(200).json(application);
-  } catch (error) {
-    res.status(400).json({ error: 'Invalid request' });
-  }
-});
+      const application = await transaction.wtppApplication.findUnique({
+        where: { id: applicationId },
+      });
+      if (!application) return null;
+
+      await transaction.channel.update({
+        where: { id: application.channelId },
+        data: { isMonetized: status === 'APPROVED' },
+      });
+      return application;
+    });
+  },
+}));
 
 adminRouter.get('/copyright/claims', async (req: Request, res: Response) => {
   try {
     const claims = await prisma.copyrightClaim.findMany({
-      where: { status: 'OPEN' },
+      where: { status: { in: ['OPEN', 'UNDER_REVIEW'] } },
       orderBy: { createdAt: 'asc' },
-      include: { video: { select: { title: true, channelId: true } } }
+      include: {
+        video: { select: { title: true, channelId: true } },
+        claimant: { select: { id: true, email: true } },
+        reviewer: { select: { id: true, email: true } },
+      }
     });
     res.status(200).json(claims);
   } catch (error) {
@@ -114,89 +116,98 @@ adminRouter.get('/copyright/claims', async (req: Request, res: Response) => {
   }
 });
 
+adminRouter.get('/copyright/escrows', async (req: Request, res: Response) => {
+  try {
+    const escrows = await prisma.escrowHold.findMany({
+      where: { status: 'HELD' },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        claimId: true,
+        heldAmountCents: true,
+        video: { select: { title: true } }
+      }
+    });
+
+    res.status(200).json(escrows.map(escrow => ({
+      ...escrow,
+      heldAmountCents: escrow.heldAmountCents.toString()
+    })));
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 const copyrightPatchSchema = z.object({
-  status: z.enum(['APPROVED_TAKEDOWN', 'REJECTED'])
+  status: z.enum(['UNDER_REVIEW', 'APPROVED_TAKEDOWN', 'REJECTED'])
 });
 
 adminRouter.patch('/copyright/claims/:id', async (req: Request, res: Response) => {
   try {
-    const claimId = req.params.id;
+    const claimId = z.string().uuid().parse(req.params.id);
     const { status } = copyrightPatchSchema.parse(req.body);
+    const reviewerId = (req as AuthRequest).user?.id;
+    if (!reviewerId) return res.status(401).json({ error: 'Unauthorized' });
 
-    const claim = await prisma.copyrightClaim.update({
-      where: { id: claimId },
-      data: { status, resolvedAt: new Date() }
+    const claim = await prisma.$transaction(async (transaction) => {
+      const reviewedAt = new Date();
+      const result = await transaction.copyrightClaim.update({
+        where: { id: claimId },
+        data: {
+          status,
+          reviewerId,
+          reviewedAt,
+          resolvedAt: status === 'UNDER_REVIEW' ? null : reviewedAt,
+        },
+      });
+      if (status === 'APPROVED_TAKEDOWN') {
+        await transaction.video.update({
+          where: { id: result.videoId },
+          data: {
+            status: 'BLOCKED',
+            visibility: 'PRIVATE',
+            copyrightReviewStatus: 'BLOCKED',
+          },
+        });
+      }
+      return result;
     });
 
     if (status === 'APPROVED_TAKEDOWN') {
-      await prisma.video.update({
-        where: { id: claim.videoId },
-        data: { status: 'REJECTED', visibility: 'PRIVATE' }
-      });
+      try {
+        await deletePublishedVideoAssets(claim.videoId);
+      } catch (error) {
+        console.error('Public media cleanup failed after an approved takedown.', {
+          name: error instanceof Error ? error.name : 'UnknownError',
+        });
+        res.status(503).json({
+          error: 'The claim was recorded and the video blocked, but public media cleanup is incomplete.',
+        });
+        return;
+      }
     }
 
     res.status(200).json(claim);
   } catch (error) {
+    if (!(error instanceof z.ZodError)) {
+      res.status(500).json({ error: 'Copyright review is temporarily unavailable.' });
+      return;
+    }
     res.status(400).json({ error: 'Invalid request' });
   }
 });
 
 export { adminRouter };
 
-const resolveEscrowSchema = z.object({
-  decision: z.enum(['RELEASE_TO_CREATOR', 'TRANSFER_TO_CLAIMANT'])
-});
-
 adminRouter.post('/copyright/claims/:id/resolve-escrow', async (req: Request, res: Response) => {
-  try {
-    const claimId = req.params.id;
-    const { decision } = resolveEscrowSchema.parse(req.body);
+  const decision = z.object({
+    decision: z.enum(['RELEASE_TO_CREATOR', 'TRANSFER_TO_CLAIMANT']),
+  }).strict().safeParse(req.body);
+  if (!decision.success) return res.status(400).json({ error: 'Invalid request' });
 
-    const escrow = await prisma.escrowHold.findUnique({
-      where: { claimId },
-      include: { claim: true, video: { include: { channel: true } } }
-    });
-
-    if (!escrow || escrow.status !== 'HELD') {
-      return res.status(400).json({ error: 'No active escrow hold found for this claim' });
-    }
-
-    if (decision === 'RELEASE_TO_CREATOR') {
-      await prisma.$transaction(async (tx) => {
-        const lastTx = await tx.walletTransaction.findFirst({
-          where: { channelId: escrow.video.channelId },
-          orderBy: { createdAt: 'desc' }
-        });
-        const currentBalance = lastTx ? Number(lastTx.balanceAfterCents) : 0;
-        const amount = Number(escrow.heldAmountCents);
-
-        await tx.walletTransaction.create({
-          data: {
-            channelId: escrow.video.channelId,
-            transactionType: 'REVENUE_CREDIT',
-            amountCents: BigInt(amount),
-            balanceAfterCents: BigInt(currentBalance + amount),
-            referenceId: `escrow-release-${escrow.id}`,
-            status: 'AVAILABLE'
-          }
-        });
-
-        await tx.escrowHold.update({
-          where: { id: escrow.id },
-          data: { status: 'RELEASED_TO_CREATOR', resolvedAt: new Date() }
-        });
-      });
-    } else {
-      await prisma.escrowHold.update({
-        where: { id: escrow.id },
-        data: { status: 'TRANSFERRED_TO_CLAIMANT', resolvedAt: new Date() }
-      });
-    }
-
-    res.status(200).json({ success: true, decision });
-  } catch (error) {
-    res.status(400).json({ error: 'Invalid request' });
-  }
+  res.status(501).json({
+    error: 'Escrow settlement is unavailable until held amounts have a verified allocation and audit trail.',
+  });
 });
 
 adminRouter.get('/monetization/providers', async (req: Request, res: Response) => {

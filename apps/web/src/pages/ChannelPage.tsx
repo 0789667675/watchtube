@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
-import { CheckCircle2 } from 'lucide-react';
+import { CheckCircle2, Flag } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import { apiClient, getApiErrorMessage } from '../api/apiClient';
+import { ReportModal } from '../components/modals/ReportModal';
 import { VideoCard } from '../components/video/VideoCard';
 import { EmptyState, ErrorState, LoadingState } from '../components/video/ViewerState';
 import type { ViewerChannel, ViewerVideo } from '../components/video/videoTypes';
@@ -17,6 +18,7 @@ type SubscriptionState = 'loading' | 'subscribed' | 'not-subscribed' | 'signed-o
 
 interface ChannelResult {
   handle: string;
+  requestNumber: number;
   channel?: ChannelPageData;
   error?: string;
 }
@@ -39,8 +41,10 @@ function safeChannelImageUrl(value: string | null | undefined): string | null {
 
 export function ChannelPage() {
   const { handle = '' } = useParams();
+  const [requestNumber, setRequestNumber] = useState(0);
   const [channelResult, setChannelResult] = useState<ChannelResult>();
-  const channelResultIsCurrent = channelResult?.handle === handle;
+  const channelResultIsCurrent = channelResult?.handle === handle
+    && channelResult.requestNumber === requestNumber;
   const channel = channelResultIsCurrent ? channelResult.channel ?? null : null;
   const isLoading = !channelResultIsCurrent;
   const error = channelResultIsCurrent ? channelResult.error ?? null : null;
@@ -51,27 +55,30 @@ export function ChannelPage() {
     : 'loading';
   const [isUpdatingSubscription, setIsUpdatingSubscription] = useState(false);
   const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
+  const [isReportOpen, setIsReportOpen] = useState(false);
 
   useEffect(() => {
     setSubscriptionError(null);
+    setIsReportOpen(false);
   }, [handle]);
 
   useEffect(() => {
     const controller = new AbortController();
 
     apiClient.get<ChannelPageData>(`/api/v1/channels/${encodeURIComponent(handle)}`, { signal: controller.signal })
-      .then(({ data }) => setChannelResult({ handle, channel: data }))
+      .then(({ data }) => setChannelResult({ handle, requestNumber, channel: data }))
       .catch((requestError: unknown) => {
         if (!controller.signal.aborted) {
           setChannelResult({
             handle,
+            requestNumber,
             error: getApiErrorMessage(requestError, 'This channel could not be loaded.'),
           });
         }
       });
 
     return () => controller.abort();
-  }, [handle]);
+  }, [handle, requestNumber]);
 
   useEffect(() => {
     if (!channel?.id) return;
@@ -143,7 +150,10 @@ export function ChannelPage() {
       {isLoading ? (
         <LoadingState label="Loading channel…" />
       ) : error || !channel ? (
-        <ErrorState message={error ?? 'This channel is unavailable.'} />
+        <ErrorState
+          message={error ?? 'This channel is unavailable.'}
+          onRetry={() => setRequestNumber((number) => number + 1)}
+        />
       ) : (
         <>
           <header className="overflow-hidden rounded-card border border-border bg-surface-light dark:bg-surface-dark">
@@ -180,34 +190,51 @@ export function ChannelPage() {
                 </p>
                 {channel.description && <p className="mt-3 max-w-3xl whitespace-pre-wrap text-sm">{channel.description}</p>}
               </div>
-              {subscriptionState === 'signed-out' ? (
-                <Link to="/auth/login" className="inline-flex shrink-0 justify-center rounded-full bg-brand-action px-5 py-2.5 font-semibold text-brand-foreground hover:bg-brand-action-hover">
-                  Sign in to subscribe
-                </Link>
-              ) : (
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                {subscriptionState === 'signed-out' ? (
+                  <Link to="/auth/login" className="inline-flex justify-center rounded-full bg-brand-action px-5 py-2.5 font-semibold text-brand-foreground hover:bg-brand-action-hover">
+                    Sign in to subscribe
+                  </Link>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={
+                      subscriptionState === 'loading' ||
+                      subscriptionState === 'unavailable' ||
+                      isUpdatingSubscription
+                    }
+                    onClick={toggleSubscription}
+                    className={`rounded-full px-5 py-2.5 font-semibold transition disabled:cursor-wait disabled:opacity-60 ${
+                      subscriptionState === 'subscribed'
+                        ? 'bg-surface-subtle text-text-primary hover:bg-surface-hover'
+                        : 'bg-brand-action text-brand-foreground hover:bg-brand-action-hover'
+                    }`}
+                  >
+                    {isUpdatingSubscription ? 'Updating…' : subscriptionState === 'subscribed' ? 'Subscribed' : 'Subscribe'}
+                  </button>
+                )}
                 <button
                   type="button"
-                  disabled={
-                    subscriptionState === 'loading' ||
-                    subscriptionState === 'unavailable' ||
-                    isUpdatingSubscription
-                  }
-                  onClick={toggleSubscription}
-                  className={`shrink-0 rounded-full px-5 py-2.5 font-semibold transition disabled:cursor-wait disabled:opacity-60 ${
-                    subscriptionState === 'subscribed'
-                      ? 'bg-surface-subtle text-text-primary hover:bg-surface-hover'
-                      : 'bg-brand-action text-brand-foreground hover:bg-brand-action-hover'
-                  }`}
+                  onClick={() => setIsReportOpen(true)}
+                  className="inline-flex items-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold text-text-muted transition hover:bg-surface-hover hover:text-text-primary"
                 >
-                  {isUpdatingSubscription ? 'Updating…' : subscriptionState === 'subscribed' ? 'Subscribed' : 'Subscribe'}
+                  <Flag className="h-4 w-4" aria-hidden="true" />
+                  Report
                 </button>
-              )}
+              </div>
             </div>
             {subscriptionError && <p role="alert" className="px-5 pb-4 text-sm text-status-warning sm:px-7">{subscriptionError}</p>}
             {subscriptionState === 'unavailable' && (
               <p role="status" className="px-5 pb-4 text-sm text-text-muted sm:px-7">Subscription status is unavailable right now.</p>
             )}
           </header>
+
+          <ReportModal
+            isOpen={isReportOpen}
+            onClose={() => setIsReportOpen(false)}
+            targetId={channel.id}
+            targetType="CHANNEL"
+          />
 
           <section className="mt-8">
             <h2 className="mb-5 text-xl font-bold">Videos</h2>

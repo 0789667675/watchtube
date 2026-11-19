@@ -1,6 +1,6 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import axios from 'axios';
-import { CheckCircle2, Copy } from 'lucide-react';
+import { CheckCircle2, Copy, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import { apiClient, getApiErrorMessage } from '../api/apiClient';
 import { VideoPlayer } from '../components/player/VideoPlayer';
@@ -24,6 +24,7 @@ type SubscriptionState = 'loading' | 'subscribed' | 'not-subscribed' | 'signed-o
 
 interface VideoResult {
   id: string;
+  requestNumber: number;
   video?: ViewerVideo;
   error?: string;
 }
@@ -37,6 +38,7 @@ interface CommentsResult {
 
 interface RelatedResult {
   id: string;
+  requestNumber: number;
   videos: ViewerVideo[];
   error: string | null;
 }
@@ -48,8 +50,10 @@ interface SubscriptionResult {
 
 export function WatchPage() {
   const { id = '' } = useParams();
+  const [videoRequestNumber, setVideoRequestNumber] = useState(0);
   const [videoResult, setVideoResult] = useState<VideoResult>();
-  const videoResultIsCurrent = videoResult?.id === id;
+  const videoResultIsCurrent = videoResult?.id === id
+    && videoResult.requestNumber === videoRequestNumber;
   const video = videoResultIsCurrent ? videoResult.video ?? null : null;
   const videoError = videoResultIsCurrent ? videoResult.error ?? null : null;
   const isLoadingVideo = !videoResultIsCurrent;
@@ -69,6 +73,12 @@ export function WatchPage() {
   const [isLoadingMoreComments, setIsLoadingMoreComments] = useState(false);
   const [commentLoadError, setCommentLoadError] = useState<string | null>(null);
   const [shareStatus, setShareStatus] = useState<string | null>(null);
+  const [initialPosition, setInitialPosition] = useState(0);
+  const [likeState, setLikeState] = useState<'liked' | 'disliked' | 'none'>('none');
+  const [likeError, setLikeError] = useState<string | null>(null);
+  const [isUpdatingLike, setIsUpdatingLike] = useState(false);
+  const playbackSessionRef = useRef('');
+  const playbackRef = useRef({ currentTime: 0, durationWatched: 0, completed: false });
   const commentsKey = `${id}:${commentRefresh}`;
   const commentsAreCurrent = commentsResult?.key === commentsKey;
   const comments = commentsAreCurrent ? commentsResult.comments : [];
@@ -76,7 +86,9 @@ export function WatchPage() {
   const commentsError = commentsAreCurrent ? commentsResult.error : null;
   const commentsLoading = !commentsAreCurrent;
   const [relatedResult, setRelatedResult] = useState<RelatedResult>();
-  const relatedResultIsCurrent = relatedResult?.id === id;
+  const [relatedRequestNumber, setRelatedRequestNumber] = useState(0);
+  const relatedResultIsCurrent = relatedResult?.id === id
+    && relatedResult.requestNumber === relatedRequestNumber;
   const relatedVideos = relatedResultIsCurrent ? relatedResult.videos : [];
   const relatedError = relatedResultIsCurrent ? relatedResult.error : null;
   const isLoadingRelated = !relatedResultIsCurrent;
@@ -92,18 +104,75 @@ export function WatchPage() {
   }, [id]);
 
   useEffect(() => {
+    if (!id) return;
+    playbackSessionRef.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    playbackRef.current = { currentTime: 0, durationWatched: 0, completed: false };
+    apiClient.get<{ lastPositionSeconds: number; completed: boolean }>(`/api/v1/analytics/history/${encodeURIComponent(id)}`)
+      .then(({ data }) => {
+        if (!data.completed && Number.isFinite(data.lastPositionSeconds)) {
+          setInitialPosition(Math.max(0, data.lastPositionSeconds));
+        }
+      })
+      .catch(() => {
+        setInitialPosition(0);
+      });
+  }, [id]);
+
+  useEffect(() => {
+    if (!video) return;
+    const controller = new AbortController();
+    apiClient.get<{ isLiked: boolean; isDisliked: boolean }>(
+      `/api/v1/videos/${encodeURIComponent(video.id)}/like-status`,
+      { signal: controller.signal },
+    )
+      .then(({ data }) => {
+        setLikeState(data.isLiked ? 'liked' : data.isDisliked ? 'disliked' : 'none');
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        if (axios.isAxiosError(requestError) && requestError.response?.status === 401) {
+          setLikeState('none');
+          return;
+        }
+        setLikeError(getApiErrorMessage(requestError, 'Your reaction status could not be loaded.'));
+      });
+    return () => controller.abort();
+  }, [video?.id]);
+
+  useEffect(() => {
+    const videoId = video?.id;
+    if (!videoId) return;
+    const interval = window.setInterval(() => {
+      const playback = playbackRef.current;
+      if (playback.currentTime <= 0) return;
+      void apiClient.post('/api/v1/analytics/telemetry', {
+        videoId,
+        sessionId: playbackSessionRef.current,
+        currentPosition: playback.currentTime,
+        durationWatched: playback.durationWatched,
+        completed: playback.completed,
+      }).catch(() => undefined);
+    }, 15000);
+    return () => window.clearInterval(interval);
+  }, [video?.id]);
+
+  useEffect(() => {
     const controller = new AbortController();
 
     apiClient.get<ViewerVideo>(`/api/v1/videos/${encodeURIComponent(id)}`, { signal: controller.signal })
-      .then(({ data }) => setVideoResult({ id, video: data }))
+      .then(({ data }) => setVideoResult({ id, requestNumber: videoRequestNumber, video: data }))
       .catch((requestError: unknown) => {
         if (!controller.signal.aborted) {
-          setVideoResult({ id, error: getApiErrorMessage(requestError, 'This video is unavailable.') });
+          setVideoResult({
+            id,
+            requestNumber: videoRequestNumber,
+            error: getApiErrorMessage(requestError, 'This video is unavailable.'),
+          });
         }
       });
 
     return () => controller.abort();
-  }, [id]);
+  }, [id, videoRequestNumber]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -159,6 +228,7 @@ export function WatchPage() {
     })
       .then(({ data }) => setRelatedResult({
         id,
+        requestNumber: relatedRequestNumber,
         videos: data.filter((item) => item.id !== id),
         error: null,
       }))
@@ -166,13 +236,14 @@ export function WatchPage() {
         if (!controller.signal.aborted) {
           setRelatedResult({
             id,
+            requestNumber: relatedRequestNumber,
             videos: [],
             error: getApiErrorMessage(requestError, 'Related videos could not be loaded.'),
           });
         }
       });
     return () => controller.abort();
-  }, [id]);
+  }, [id, relatedRequestNumber]);
 
   const toggleSubscription = async () => {
     if (
@@ -197,6 +268,27 @@ export function WatchPage() {
       }
     } finally {
       setIsUpdatingSubscription(false);
+    }
+  };
+
+  const toggleLike = async (isDislike: boolean) => {
+    if (isUpdatingLike) return;
+    setLikeError(null);
+    setIsUpdatingLike(true);
+    try {
+      const { data } = await apiClient.post<{ isLiked: boolean; isDisliked: boolean }>(
+        `/api/v1/videos/${encodeURIComponent(id)}/like`,
+        { isDislike },
+      );
+      setLikeState(data.isLiked ? 'liked' : data.isDisliked ? 'disliked' : 'none');
+    } catch (requestError) {
+      if (axios.isAxiosError(requestError) && requestError.response?.status === 401) {
+        setLikeError('Sign in to like or dislike this video.');
+      } else {
+        setLikeError(getApiErrorMessage(requestError, 'Your reaction could not be updated.'));
+      }
+    } finally {
+      setIsUpdatingLike(false);
     }
   };
 
@@ -264,14 +356,34 @@ export function WatchPage() {
   const playlistUrl = video?.variants?.find((variant) => Boolean(variant.playlistUrl))?.playlistUrl;
 
   if (isLoadingVideo) return <LoadingState label="Loading video…" />;
-  if (videoError || !video) return <div className="px-4 py-8"><ErrorState message={videoError ?? 'This video is unavailable.'} /></div>;
+  if (videoError || !video) {
+    return (
+      <div className="px-4 py-8">
+        <ErrorState
+          message={videoError ?? 'This video is unavailable.'}
+          onRetry={() => setVideoRequestNumber((number) => number + 1)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto grid max-w-[1700px] grid-cols-1 gap-8 px-0 py-4 sm:px-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-7">
       <div className="min-w-0">
         <div className="overflow-hidden rounded-none bg-black sm:rounded-card">
           {playlistUrl ? (
-            <VideoPlayer src={playlistUrl} />
+            <VideoPlayer
+              src={playlistUrl}
+              initialPosition={initialPosition}
+              onProgress={(currentTime, duration, completed) => {
+                playbackRef.current.currentTime = currentTime;
+                playbackRef.current.durationWatched = Math.max(
+                  playbackRef.current.durationWatched,
+                  currentTime,
+                );
+                playbackRef.current.completed = completed || (duration > 0 && currentTime >= duration);
+              }}
+            />
           ) : (
             <div role="status" className="flex aspect-video items-center justify-center px-6 text-center text-sm text-white/75">
               Playback is unavailable for this video right now.
@@ -328,6 +440,24 @@ export function WatchPage() {
               </span>
               <button
                 type="button"
+                onClick={() => void toggleLike(false)}
+                disabled={isUpdatingLike}
+                aria-pressed={likeState === 'liked'}
+                className={`inline-flex min-h-11 items-center gap-2 rounded-full px-4 py-2 text-sm font-medium disabled:opacity-60 ${likeState === 'liked' ? 'bg-brand-light/20 text-brand-dark' : 'bg-surface-subtle hover:bg-surface-hover'}`}
+              >
+                <ThumbsUp className="h-4 w-4" /> Like
+              </button>
+              <button
+                type="button"
+                onClick={() => void toggleLike(true)}
+                disabled={isUpdatingLike}
+                aria-pressed={likeState === 'disliked'}
+                className={`inline-flex min-h-11 items-center gap-2 rounded-full px-4 py-2 text-sm font-medium disabled:opacity-60 ${likeState === 'disliked' ? 'bg-brand-light/20 text-brand-dark' : 'bg-surface-subtle hover:bg-surface-hover'}`}
+              >
+                <ThumbsDown className="h-4 w-4" /> Dislike
+              </button>
+              <button
+                type="button"
                 onClick={copyVideoLink}
                 className="inline-flex items-center gap-2 rounded-full bg-surface-subtle px-4 py-2 text-sm font-medium hover:bg-surface-hover"
               >
@@ -340,6 +470,7 @@ export function WatchPage() {
             <p role="status" className="mt-3 text-sm text-text-muted">Subscription status is unavailable right now.</p>
           )}
           {shareStatus && <p role="status" className="mt-2 text-sm text-text-muted">{shareStatus}</p>}
+          {likeError && <p role="alert" className="mt-2 text-sm text-status-warning">{likeError}</p>}
 
           <div className="mt-4 rounded-card bg-surface-subtle p-4">
             <p className="mb-2 text-sm font-semibold">
@@ -350,102 +481,112 @@ export function WatchPage() {
           </div>
         </section>
 
-        <section className="px-4 py-8 sm:px-0">
-          <h2 className="mb-5 text-xl font-bold">Comments</h2>
-          <form onSubmit={submitComment} className="mb-7">
-            <label htmlFor="comment" className="sr-only">Add a comment</label>
-            <textarea
-              id="comment"
-              value={commentText}
-              onChange={(event) => setCommentText(event.target.value)}
-              maxLength={1000}
-              rows={2}
-              placeholder="Add a comment…"
-              className="w-full resize-y border-b border-divider bg-transparent py-2 text-sm focus:border-focus focus:outline-none"
-            />
-            <div className="mt-2 flex items-center justify-between gap-4">
-              <p className="text-xs text-text-muted">{commentText.length}/1000</p>
-              <button
-                type="submit"
-                disabled={!commentText.trim() || isPostingComment}
-                className="rounded-full bg-brand-action px-4 py-2 text-sm font-semibold text-brand-foreground hover:bg-brand-action-hover disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isPostingComment ? 'Posting…' : 'Comment'}
-              </button>
-            </div>
-            {commentError && (
-              <p role="alert" className="mt-2 text-sm text-status-warning">
-                {commentError === 'Sign in to post a comment.' ? (
-                  <><Link to="/auth/login" className="font-semibold underline">Sign in</Link> to post a comment.</>
-                ) : commentError}
-              </p>
-            )}
-            {commentStatus && <p role="status" className="mt-2 text-sm text-text-muted">{commentStatus}</p>}
-          </form>
-
-          {commentsLoading ? (
-            <LoadingState label="Loading comments…" />
-          ) : commentsError ? (
-            <ErrorState message={commentsError} />
-          ) : comments.length === 0 ? (
-            <EmptyState title="No comments yet" message="Be the first to join the conversation." />
-          ) : (
-            <div className="space-y-6">
-              {comments.map((comment) => {
-                const commentChannel = comment.user?.channels?.[0];
-                return (
-                  <article key={comment.id} className="flex gap-3">
-                    <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-surface-subtle">
-                      {commentChannel?.avatarUrl && (
-                        <img src={commentChannel.avatarUrl} alt="" className="h-full w-full object-cover" />
-                      )}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold">
-                        {commentChannel?.handle ?? 'Member'}
-                        <time className="ml-2 font-normal text-text-muted">
-                          {new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(comment.createdAt))}
-                        </time>
-                      </p>
-                      <p className="mt-1 whitespace-pre-wrap text-sm">{comment.content}</p>
-                    </div>
-                  </article>
-                );
-              })}
-              {commentsNextCursor && (
-                <div className="text-center">
-                  <button
-                    type="button"
-                    disabled={isLoadingMoreComments}
-                    onClick={loadMoreComments}
-                    className="rounded-full bg-surface-subtle px-4 py-2 text-sm font-semibold hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {isLoadingMoreComments ? 'Loading…' : 'Load more comments'}
-                  </button>
-                  {commentLoadError && <p role="alert" className="mt-2 text-sm text-status-warning">{commentLoadError}</p>}
-                </div>
-              )}
-            </div>
-          )}
-        </section>
       </div>
 
-      <aside className="px-4 pb-8 sm:px-0 lg:pt-1">
+      <aside className="px-4 pb-8 sm:px-0 lg:row-span-2 lg:pt-1">
         <h2 className="mb-4 text-lg font-bold">Up next</h2>
         {isLoadingRelated ? (
           <LoadingState label="Loading related videos…" />
         ) : relatedError ? (
-          <p role="status" className="text-sm text-text-muted">{relatedError}</p>
+          <div role="status" className="text-sm text-text-muted">
+            <p>{relatedError}</p>
+            <button
+              type="button"
+              onClick={() => setRelatedRequestNumber((number) => number + 1)}
+              className="mt-3 min-h-11 rounded-control bg-surface-subtle px-4 font-semibold text-text-primary hover:bg-surface-hover"
+            >
+              Try again
+            </button>
+          </div>
         ) : relatedVideos.length === 0 ? (
           <p className="text-sm text-text-muted">No related videos are available.</p>
         ) : (
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-1">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-1">
             {relatedVideos.map((relatedVideo) => (
-              <VideoCard key={relatedVideo.id} video={relatedVideo} />
+              <VideoCard key={relatedVideo.id} video={relatedVideo} layout="horizontal" />
             ))}
           </div>
         )}
       </aside>
+
+      <section className="px-4 py-2 sm:px-0 lg:col-start-1 lg:row-start-2">
+        <h2 className="mb-5 text-xl font-bold">Comments</h2>
+        <form onSubmit={submitComment} className="mb-7">
+          <label htmlFor="comment" className="sr-only">Add a comment</label>
+          <textarea
+            id="comment"
+            value={commentText}
+            onChange={(event) => setCommentText(event.target.value)}
+            maxLength={1000}
+            rows={2}
+            placeholder="Add a comment…"
+            className="w-full resize-y border-b border-divider bg-transparent py-2 text-sm focus:border-focus focus:outline-none"
+          />
+          <div className="mt-2 flex items-center justify-between gap-4">
+            <p className="text-xs text-text-muted">{commentText.length}/1000</p>
+            <button
+              type="submit"
+              disabled={!commentText.trim() || isPostingComment}
+              className="rounded-full bg-brand-action px-4 py-2 text-sm font-semibold text-brand-foreground hover:bg-brand-action-hover disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isPostingComment ? 'Posting…' : 'Comment'}
+            </button>
+          </div>
+          {commentError && (
+            <p role="alert" className="mt-2 text-sm text-status-warning">
+              {commentError === 'Sign in to post a comment.' ? (
+                <><Link to="/auth/login" className="font-semibold underline">Sign in</Link> to post a comment.</>
+              ) : commentError}
+            </p>
+          )}
+          {commentStatus && <p role="status" className="mt-2 text-sm text-text-muted">{commentStatus}</p>}
+        </form>
+
+        {commentsLoading ? (
+          <LoadingState label="Loading comments…" />
+        ) : commentsError ? (
+          <ErrorState message={commentsError} onRetry={() => setCommentRefresh((value) => value + 1)} />
+        ) : comments.length === 0 ? (
+          <EmptyState title="No comments yet" message="Be the first to join the conversation." />
+        ) : (
+          <div className="space-y-6">
+            {comments.map((comment) => {
+              const commentChannel = comment.user?.channels?.[0];
+              return (
+                <article key={comment.id} className="flex gap-3">
+                  <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-surface-subtle">
+                    {commentChannel?.avatarUrl && (
+                      <img src={commentChannel.avatarUrl} alt="" className="h-full w-full object-cover" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold">
+                      {commentChannel?.handle ?? 'Member'}
+                      <time className="ml-2 font-normal text-text-muted">
+                        {new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(comment.createdAt))}
+                      </time>
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm">{comment.content}</p>
+                  </div>
+                </article>
+              );
+            })}
+            {commentsNextCursor && (
+              <div className="text-center">
+                <button
+                  type="button"
+                  disabled={isLoadingMoreComments}
+                  onClick={loadMoreComments}
+                  className="rounded-full bg-surface-subtle px-4 py-2 text-sm font-semibold hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isLoadingMoreComments ? 'Loading…' : 'Load more comments'}
+                </button>
+                {commentLoadError && <p role="alert" className="mt-2 text-sm text-status-warning">{commentLoadError}</p>}
+              </div>
+            )}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

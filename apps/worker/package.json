@@ -5,8 +5,9 @@
   "main": "dist/worker.js",
   "scripts": {
     "build": "tsc",
-    "dev": "node --env-file=../../.env -r ts-node/register src/worker.ts",
-    "start": "node dist/worker.js"
+    "dev": "node scripts/dev-local.cjs",
+    "test": "node -r ts-node/register --test tests/worker.reliability.test.ts",
+    "start": "node scripts/start.cjs"
   },
   "dependencies": {
     "bullmq": "^4.0.0",

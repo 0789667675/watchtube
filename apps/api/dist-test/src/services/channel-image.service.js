@@ -3,8 +3,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.InvalidChannelImageError = exports.CHANNEL_IMAGE_MAX_FILE_SIZE = void 0;
+exports.InvalidChannelImageError = exports.VIDEO_THUMBNAIL_MAX_FILE_SIZE = exports.CHANNEL_IMAGE_MAX_FILE_SIZE = void 0;
 exports.processChannelImage = processChannelImage;
+exports.processVideoThumbnail = processVideoThumbnail;
 const sharp_1 = __importDefault(require("sharp"));
 exports.CHANNEL_IMAGE_MAX_FILE_SIZE = {
     avatar: 5 * 1024 * 1024,
@@ -17,6 +18,12 @@ const FORMAT_BY_CONTENT_TYPE = {
 };
 const MAX_IMAGE_PIXELS = 40_000_000;
 const MAX_IMAGE_DIMENSION = 8192;
+exports.VIDEO_THUMBNAIL_MAX_FILE_SIZE = 5 * 1024 * 1024;
+const VIDEO_THUMBNAIL_FORMATS = {
+    'image/jpeg': 'jpeg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+};
 class InvalidChannelImageError extends Error {
     constructor(message = 'The uploaded file is not a valid supported image.') {
         super(message);
@@ -65,6 +72,41 @@ async function processChannelImage(input, purpose, contentType) {
         return await image
             .rotate()
             .resize({ ...dimensions, fit: 'cover', position: 'centre' })
+            .webp({ quality: 82, effort: 4 })
+            .toBuffer();
+    }
+    catch (error) {
+        if (error instanceof InvalidChannelImageError)
+            throw error;
+        throw new InvalidChannelImageError();
+    }
+}
+async function processVideoThumbnail(input, contentType) {
+    const expectedFormat = VIDEO_THUMBNAIL_FORMATS[contentType];
+    if (!expectedFormat || input.length === 0 || input.length > exports.VIDEO_THUMBNAIL_MAX_FILE_SIZE) {
+        throw new InvalidChannelImageError('Choose a JPEG, PNG, or WebP thumbnail no larger than 5 MB.');
+    }
+    try {
+        const image = (0, sharp_1.default)(input, {
+            failOn: 'error',
+            limitInputPixels: MAX_IMAGE_PIXELS,
+            sequentialRead: true,
+        });
+        const metadata = await image.metadata();
+        if (metadata.format !== expectedFormat
+            || !metadata.width
+            || !metadata.height
+            || (metadata.pages !== undefined && metadata.pages > 1)
+            || metadata.width > MAX_IMAGE_DIMENSION
+            || metadata.height > MAX_IMAGE_DIMENSION
+            || metadata.width * metadata.height > MAX_IMAGE_PIXELS
+            || metadata.width < 320
+            || metadata.height < 180) {
+            throw new InvalidChannelImageError('Thumbnail must be a valid JPEG, PNG, or WebP image at least 320 by 180 pixels.');
+        }
+        return await image
+            .rotate()
+            .resize({ width: 1280, height: 720, fit: 'cover', position: 'centre' })
             .webp({ quality: 82, effort: 4 })
             .toBuffer();
     }

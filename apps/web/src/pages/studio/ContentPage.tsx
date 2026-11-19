@@ -37,6 +37,7 @@ export function ContentPage() {
     unauthorized: false,
   });
   const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [videoToEdit, setVideoToEdit] = useState<string | null>(null);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(profile.channels.length === 0);
 
   useEffect(() => {
@@ -67,6 +68,9 @@ export function ContentPage() {
   const contentError = videoListResult.key === refreshKey ? videoListResult.error : '';
   const isUnauthorized = videoListResult.key === refreshKey && videoListResult.unauthorized;
   const refreshVideos = () => setRefreshKey((current) => current + 1);
+  const channelVideos = selectedChannelId
+    ? videos.filter((video) => video.channelId === selectedChannelId)
+    : videos;
 
   const onChannelCreated = (channel: StudioChannel) => {
     addChannel(channel);
@@ -104,7 +108,7 @@ export function ContentPage() {
           </button>
           <button
             type="button"
-            onClick={() => setIsUploadOpen(true)}
+            onClick={() => { setVideoToEdit(null); setIsUploadOpen(true); }}
             disabled={!selectedChannelId}
             className="rounded-control bg-brand-action px-4 py-2 text-sm font-semibold text-brand-foreground transition hover:bg-brand-action-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -130,24 +134,26 @@ export function ContentPage() {
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-divider px-4 py-4 sm:px-5">
           <h2 className="font-semibold">Videos</h2>
           {!isLoadingVideos && !contentError && (
-            <span className="text-sm text-text-muted">{videos.length} {videos.length === 1 ? 'video' : 'videos'}</span>
+            <span className="text-sm text-text-muted">{channelVideos.length} {channelVideos.length === 1 ? 'video' : 'videos'}</span>
           )}
         </div>
         {isLoadingVideos ? (
           <p role="status" className="p-8 text-center text-sm text-text-muted">Loading your videos…</p>
-        ) : videos.length === 0 ? (
+        ) : channelVideos.length === 0 ? (
           <div className="p-8 text-center">
             {contentError ? (
               <p role="status" className="text-sm text-text-muted">Your video library is unavailable right now.</p>
             ) : (
               <>
-                <h3 className="font-semibold">No videos yet</h3>
+                <h3 className="font-semibold">{selectedChannelId && videos.length > 0 ? 'No videos for this channel' : 'No videos yet'}</h3>
                 <p className="mt-1 text-sm text-text-muted">
-                  Upload a video to a channel you own to start building your library.
+                  {selectedChannelId && videos.length > 0
+                    ? 'Choose another owned channel or upload a new video.'
+                    : 'Upload a video to a channel you own to start building your library.'}
                 </p>
                 <button
                   type="button"
-                  onClick={() => setIsUploadOpen(true)}
+                  onClick={() => { setVideoToEdit(null); setIsUploadOpen(true); }}
                   disabled={!selectedChannelId}
                   className="mt-4 rounded-control bg-brand-action px-4 py-2 text-sm font-semibold text-brand-foreground hover:bg-brand-action-hover disabled:opacity-50"
                 >
@@ -165,13 +171,16 @@ export function ContentPage() {
                   <th scope="col" className="px-4 py-3 font-medium">Channel</th>
                   <th scope="col" className="px-4 py-3 font-medium">Visibility</th>
                   <th scope="col" className="px-4 py-3 font-medium">Status</th>
+                  <th scope="col" className="px-4 py-3 font-medium">Actions</th>
                   <th scope="col" className="px-4 py-3 font-medium">Uploaded</th>
                   <th scope="col" className="px-4 py-3 text-right font-medium">Views</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-divider">
-                {videos.map((video) => {
+                {channelVideos.map((video) => {
                   const channel = profile.channels.find((item) => item.id === video.channelId);
+                  const isPlayable = ['PUBLISHED', 'READY'].includes(video.status)
+                    && video.visibility !== 'PRIVATE';
                   return (
                     <tr key={video.id} className="hover:bg-surface-hover">
                       <td className="max-w-sm px-4 py-4 sm:px-5">
@@ -179,13 +188,31 @@ export function ContentPage() {
                           {video.thumbnailUrl
                             ? <img src={video.thumbnailUrl} alt="" loading="lazy" className="aspect-video w-24 shrink-0 rounded-control object-cover" />
                             : <div aria-hidden="true" className="aspect-video w-24 shrink-0 rounded-control bg-surface-subtle" />}
-                          <span className="line-clamp-2 font-medium">{video.title}</span>
+                          {isPlayable ? (
+                            <Link
+                              to={`/watch/${encodeURIComponent(video.id)}?from=studio`}
+                              className="line-clamp-2 font-medium hover:text-brand-dark hover:underline"
+                            >
+                              {video.title}
+                            </Link>
+                          ) : (
+                            <span className="line-clamp-2 font-medium">{video.title}</span>
+                          )}
                         </div>
                       </td>
                       <td className="px-4 py-4">{channel?.name ?? 'Channel unavailable'}</td>
                       <td className="px-4 py-4">{video.visibility}</td>
                       <td className="px-4 py-4">
                         <span className="rounded-full bg-surface-subtle px-2.5 py-1 text-xs font-medium">{video.status}</span>
+                      </td>
+                      <td className="px-4 py-4">
+                        <button
+                          type="button"
+                          onClick={() => { setVideoToEdit(video.id); setIsUploadOpen(true); }}
+                          className="font-semibold text-brand-dark hover:underline"
+                        >
+                          Edit
+                        </button>
                       </td>
                       <td className="whitespace-nowrap px-4 py-4 text-text-muted">{new Date(video.createdAt).toLocaleDateString()}</td>
                       <td className="px-4 py-4 text-right tabular-nums">{new Intl.NumberFormat().format(video.viewsCount)}</td>
@@ -201,7 +228,8 @@ export function ContentPage() {
       <UploadModal
         isOpen={isUploadOpen}
         channelId={selectedChannelId}
-        onClose={() => setIsUploadOpen(false)}
+        initialVideoId={videoToEdit}
+        onClose={() => { setIsUploadOpen(false); setVideoToEdit(null); }}
         onUploaded={refreshVideos}
       />
       <ChannelOnboardingModal

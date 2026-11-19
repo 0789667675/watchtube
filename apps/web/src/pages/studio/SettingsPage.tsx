@@ -106,8 +106,10 @@ export function SettingsPage() {
     register,
     handleSubmit,
     reset,
+    watch,
     formState: { errors, isDirty, isSubmitting },
   } = useForm<ChannelSettingsForm>({ defaultValues: emptyForm });
+  const descriptionLength = watch('description')?.length ?? 0;
 
   useEffect(() => {
     if (!selectedChannelId) return;
@@ -444,6 +446,9 @@ export function SettingsPage() {
                   disabled={isSubmitting}
                   className="mt-1 w-full resize-y rounded-control border border-border bg-canvas-light px-4 py-2 focus:outline-none focus:ring-2 focus:ring-focus dark:bg-canvas-obsidian"
                 />
+                <p className="mt-1 text-right text-xs text-text-muted">
+                  {descriptionLength}/1,000
+                </p>
                 {errors.description?.message && <p role="alert" className="mt-1 text-sm text-status-warning">{errors.description.message}</p>}
               </div>
 

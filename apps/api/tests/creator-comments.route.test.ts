@@ -211,6 +211,24 @@ test('listing validates and forwards pagination and search filters', async () =>
   assert.equal(invalidPage.status, 400);
 });
 
+test('an empty comment result reports zero pages', async () => {
+  const harness = await createHarness();
+  const response = await get(
+    harness.baseUrl,
+    `/channels/${CHANNEL_ID}/comments?search=no-matching-comments`,
+  );
+  const body = await response.json() as {
+    comments: JsonCreatorComment[];
+    total: number;
+    totalPages: number;
+  };
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(body.comments, []);
+  assert.equal(body.total, 0);
+  assert.equal(body.totalPages, 0);
+});
+
 test('an owner can permanently delete a comment only within the owned channel', async () => {
   const harness = await createHarness();
   const response = await remove(

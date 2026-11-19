@@ -18,12 +18,12 @@
     "dev:api": {
       "cache": false,
       "persistent": true,
-      "passThroughEnv": ["DATABASE_URL", "REDIS_URL", "REDIS_HOST", "REDIS_PORT", "PORT"]
+      "passThroughEnv": ["DATABASE_URL", "REDIS_URL", "REDIS_HOST", "REDIS_PORT", "API_PORT", "PORT"]
     },
     "dev:web": {
       "cache": false,
       "persistent": true,
-      "passThroughEnv": ["PORT", "API_PROXY_TARGET"]
+      "passThroughEnv": ["API_PORT", "PORT", "API_PROXY_TARGET", "WATCHTUBE_LOCAL_ONLY"]
     }
   }
 }

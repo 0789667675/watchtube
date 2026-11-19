@@ -1,10 +1,19 @@
 import express, { Request, Response } from 'express';
-import { z } from 'zod';
 import { db as prisma } from '@watchtube/database';
 import { authenticate, AuthRequest } from '../middleware/auth';
-import { v4 as uuidv4 } from 'uuid';
+import { sendDatabaseErrorResponse } from '../config/databaseErrors';
 
 const walletRouter = express.Router();
+
+export function createPayoutRouter(authenticateMiddleware: express.RequestHandler): express.Router {
+  const router = express.Router();
+  router.post('/', authenticateMiddleware, (_req: Request, res: Response) => {
+    res.status(501).json({
+      error: 'Payouts are unavailable until a verified payment-provider integration is configured.',
+    });
+  });
+  return router;
+}
 
 walletRouter.get('/balance', authenticate, async (req: AuthRequest, res: Response) => {
   try {
@@ -20,7 +29,11 @@ walletRouter.get('/balance', authenticate, async (req: AuthRequest, res: Respons
     const balanceCents = lastTx ? lastTx.balanceAfterCents.toString() : '0';
     res.status(200).json({ balanceCents, currency: 'RWF' });
   } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
+    sendDatabaseErrorResponse(
+      res,
+      error,
+      'Wallet balance is temporarily unavailable because the database is unavailable.',
+    );
   }
 });
 
@@ -50,64 +63,14 @@ walletRouter.get('/ledger', authenticate, async (req: AuthRequest, res: Response
 
     res.status(200).json(serializedLedger);
   } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
+    sendDatabaseErrorResponse(
+      res,
+      error,
+      'Wallet history is temporarily unavailable because the database is unavailable.',
+    );
   }
 });
 
-const payoutSchema = z.object({
-  amountCents: z.number().positive(),
-  provider: z.enum(['MTN_MOMO', 'AIRTEL_MONEY']),
-  phoneNumber: z.string()
-});
-
-walletRouter.post('/request-payout', authenticate, async (req: AuthRequest, res: Response) => {
-  try {
-    const userId = req.user!.id;
-    const { amountCents, provider, phoneNumber } = payoutSchema.parse(req.body);
-
-    const channel = await prisma.channel.findFirst({ where: { userId } });
-    if (!channel) return res.status(404).json({ error: 'Channel not found' });
-
-    const lastTx = await prisma.walletTransaction.findFirst({
-      where: { channelId: channel.id },
-      orderBy: { createdAt: 'desc' }
-    });
-
-    const currentBalance = lastTx ? Number(lastTx.balanceAfterCents) : 0;
-
-    if (amountCents > currentBalance) {
-      return res.status(400).json({ error: 'Insufficient balance' });
-    }
-
-    const referenceId = uuidv4();
-    const newBalance = currentBalance - amountCents;
-
-    const tx = await prisma.walletTransaction.create({
-      data: {
-        channelId: channel.id,
-        transactionType: 'PAYOUT',
-        amountCents: BigInt(-amountCents),
-        balanceAfterCents: BigInt(newBalance),
-        referenceId,
-        status: 'PENDING'
-      }
-    });
-
-    res.status(201).json({
-      id: tx.id,
-      status: tx.status,
-      referenceId,
-      amountCents: tx.amountCents.toString(),
-      balanceAfterCents: tx.balanceAfterCents.toString()
-    });
-
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-        res.status(400).json({ error: error.errors });
-    } else {
-        res.status(500).json({ error: 'Internal server error' });
-    }
-  }
-});
+walletRouter.use('/request-payout', createPayoutRouter(authenticate));
 
 export { walletRouter };

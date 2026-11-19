@@ -6,29 +6,41 @@ import { VideoCard } from '../components/video/VideoCard';
 import { EmptyState, ErrorState, LoadingState } from '../components/video/ViewerState';
 import type { ViewerVideo } from '../components/video/videoTypes';
 
+interface SubscriptionFeedResult {
+  requestNumber: number;
+  videos: ViewerVideo[];
+  isSignedOut: boolean;
+  error: string | null;
+}
+
 export function SubscriptionsPage() {
-  const [videos, setVideos] = useState<ViewerVideo[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSignedOut, setIsSignedOut] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [requestNumber, setRequestNumber] = useState(0);
+  const [result, setResult] = useState<SubscriptionFeedResult>();
+  const resultIsCurrent = result?.requestNumber === requestNumber;
+  const videos = resultIsCurrent ? result.videos : [];
+  const isSignedOut = resultIsCurrent && result.isSignedOut;
+  const error = resultIsCurrent ? result.error : null;
+  const isLoading = !resultIsCurrent;
 
   useEffect(() => {
     const controller = new AbortController();
     apiClient.get<ViewerVideo[]>('/api/v1/feed/subscriptions', { signal: controller.signal })
-      .then(({ data }) => setVideos(data))
+      .then(({ data }) => setResult({ requestNumber, videos: data, isSignedOut: false, error: null }))
       .catch((requestError: unknown) => {
         if (controller.signal.aborted) return;
         if (axios.isAxiosError(requestError) && requestError.response?.status === 401) {
-          setIsSignedOut(true);
+          setResult({ requestNumber, videos: [], isSignedOut: true, error: null });
         } else {
-          setError(getApiErrorMessage(requestError, 'Please try again in a moment.'));
+          setResult({
+            requestNumber,
+            videos: [],
+            isSignedOut: false,
+            error: getApiErrorMessage(requestError, 'Please try again in a moment.'),
+          });
         }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setIsLoading(false);
       });
     return () => controller.abort();
-  }, []);
+  }, [requestNumber]);
 
   return (
     <section className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8">
@@ -38,7 +50,7 @@ export function SubscriptionsPage() {
       </header>
 
       {isLoading ? (
-        <LoadingState label="Loading subscriptions…" />
+        <LoadingState label="Loading subscriptions…" layout="grid" />
       ) : isSignedOut ? (
         <div className="mx-auto max-w-xl py-16 text-center">
           <h2 className="font-semibold">Sign in to see your subscriptions</h2>
@@ -48,7 +60,7 @@ export function SubscriptionsPage() {
           </Link>
         </div>
       ) : error ? (
-        <ErrorState message={error} />
+        <ErrorState message={error} onRetry={() => setRequestNumber((number) => number + 1)} />
       ) : videos.length === 0 ? (
         <EmptyState title="No videos in your feed yet" message="New public videos from channels you subscribe to will appear here." />
       ) : (
