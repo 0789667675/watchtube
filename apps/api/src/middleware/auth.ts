@@ -66,7 +66,24 @@ export function createAuthenticate(
   };
 }
 
-export const authenticate = createAuthenticate(async (id) => db.user.findUnique({
+export function createOptionalAuthenticate(
+  findUser: (id: string) => Promise<AuthenticatedUser | null>,
+): RequestHandler {
+  const authenticateUser = createAuthenticate(findUser);
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    const token = req.cookies?.token || req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      next();
+      return;
+    }
+    return authenticateUser(req, res, next);
+  };
+}
+
+const findAuthenticatedUser = async (id: string) => db.user.findUnique({
   where: { id },
   select: { id: true, role: true, status: true },
-}));
+});
+
+export const authenticate = createAuthenticate(findAuthenticatedUser);
+export const optionalAuthenticate = createOptionalAuthenticate(findAuthenticatedUser);

@@ -4,11 +4,16 @@ import { z } from 'zod';
 import { sendDatabaseErrorResponse } from '../config/databaseErrors';
 import { InvalidChannelImageError } from '../services/channel-image.service';
 import { StorageUnavailableError } from '../services/storage.service';
+import { emitPlatformEvent } from '../services/notifications';
 
 const MAX_UPLOAD_SIZE = 2 * 1024 * 1024 * 1024;
+const MAX_SHORT_UPLOAD_SIZE = 1024 * 1024 * 1024;
+const MAX_SHORT_DURATION_SECONDS = 180;
 const MAX_TAGS = 20;
 const UPLOAD_URL_TTL_SECONDS = 15 * 60;
 const QUEUE_ADD_TIMEOUT_MS = 5000;
+const PROCESSING_JOB_ATTEMPTS = 3;
+const PROCESSING_RETRY_DELAY_MS = 1000;
 const ALLOWED_CONTENT_TYPES = ['video/mp4', 'video/webm', 'video/quicktime'] as const;
 const uploadKeyPattern = /^uploads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -19,6 +24,7 @@ const categories = [
   'NONPROFITS_ACTIVISM', 'OTHER',
 ] as const;
 const metadataSchema = z.object({
+  isShort: z.boolean().optional().default(false),
   title: z.string().trim().min(1).max(255),
   description: z.string().trim().max(5000).nullable().optional(),
   tags: z.array(z.string().trim().min(1).max(50)).max(MAX_TAGS),
@@ -34,6 +40,9 @@ const uploadIntentSchema = z.object({
   videoId: z.string().uuid(),
   contentType: z.enum(ALLOWED_CONTENT_TYPES),
   fileSize: z.number().int().positive().max(MAX_UPLOAD_SIZE),
+  duration: z.number().positive().max(21600).optional(),
+  width: z.number().int().positive().max(10000).optional(),
+  height: z.number().int().positive().max(10000).optional(),
 });
 
 const refreshUploadSchema = uploadIntentSchema.pick({
@@ -51,6 +60,7 @@ interface AuthenticatedRequest extends Request {
 
 export interface UploadVideo {
   id: string;
+  isShort: boolean;
   channelId: string;
   rawStorageKey: string | null;
   processingAttempts: number;
@@ -78,6 +88,7 @@ export interface UploadVideo {
 
 export interface UploadVideoSummary {
   id: string;
+  isShort: boolean;
   channelId: string;
   title: string;
   status: UploadVideo['status'];
@@ -108,11 +119,13 @@ export interface VideoUploadRepository {
     copyrightDeclared: boolean;
     copyrightDeclaredById: string | null;
     copyrightDeclaredAt: Date | null;
+    isShort: boolean;
   }): Promise<{ id: string }>;
   updateMetadata(input: {
     videoId: string;
     userId: string;
     metadata: z.infer<typeof metadataSchema>;
+    publishedAssets?: { thumbnailUrl: string; playlistUrls: Record<string, string> };
   }): Promise<boolean>;
   setUploadTarget(input: {
     videoId: string;
@@ -154,7 +167,12 @@ export interface VideoUploadStorage {
     storageKey: string;
     expiresIn: number;
   }>;
-  normalizeThumbnail(storageKey: string, contentType: string, fileSize: number): Promise<boolean>;
+  normalizeThumbnail(
+    storageKey: string,
+    contentType: string,
+    fileSize: number,
+    isShort: boolean,
+  ): Promise<boolean>;
   publishAssets(
     videoId: string,
     selectedThumbnailKey?: string,
@@ -166,7 +184,11 @@ export interface VideoQueue {
   add(
     name: string,
     data: { videoId: string; rawStorageKey: string },
-    options: { jobId: string },
+    options: {
+      jobId: string;
+      attempts: number;
+      backoff: { type: 'exponential'; delay: number };
+    },
   ): Promise<unknown>;
 }
 
@@ -211,7 +233,42 @@ function sendStorageUnavailable(res: Response, error: unknown): void {
     }
   }
   console.error('Video upload storage operation failed.', details);
-  res.status(503).json({ error: 'Cloud storage is not configured or is temporarily unavailable.' });
+  const errorCode = typeof error === 'object' && error !== null && 'code' in error
+    ? String(error.code)
+    : '';
+  const errorName = typeof error === 'object' && error !== null && 'name' in error
+    ? String(error.name)
+    : '';
+  const errorMessage = error instanceof Error ? error.message : '';
+  const status = details.status;
+  let code = 'STORAGE_TEMPORARY';
+  if (
+    errorName === 'StorageUnavailableError'
+    && /(not configured|missing environment|bucket configuration|configuration is invalid)/i.test(errorMessage)
+  ) {
+    code = 'STORAGE_CONFIGURATION';
+  } else if (
+    /AccessDenied|Unauthorized|InvalidAccessKey|SignatureDoesNotMatch|403|401/i.test(`${errorCode} ${errorName}`)
+    || status === 401
+    || status === 403
+  ) {
+    code = 'STORAGE_PERMISSION';
+  } else if (
+    /ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|NetworkingError/i.test(`${errorCode} ${errorName}`)
+  ) {
+    code = 'STORAGE_NETWORK';
+  } else if (
+    status === 429
+    || /SlowDown|Throttl|TooManyRequests|RequestLimitExceeded/i.test(`${errorCode} ${errorName}`)
+  ) {
+    code = 'STORAGE_THROTTLED';
+  }
+  const message = code === 'STORAGE_CONFIGURATION'
+    ? 'Cloud storage is not configured. Configure R2 credentials and public media settings for this API environment.'
+    : code === 'STORAGE_THROTTLED'
+      ? 'Cloud storage is temporarily throttling requests. Wait briefly, then retry.'
+      : 'Cloud storage is temporarily unavailable or rejected the request.';
+  res.status(503).json({ code, error: message });
 }
 
 export function createVideoUploadRouter(dependencies: VideoUploadRouteDependencies): Router {
@@ -257,9 +314,20 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
     }
   });
 
-  router.get('/videos/:id([0-9a-fA-F-]+)', dependencies.authenticate, async (req: Request, res: Response) => {
-    const userId = getUserId(req, res);
-    if (!userId) return;
+  const optionalAuthenticate: RequestHandler = (req, res, next) => {
+    if (!req.cookies?.token && !req.headers.authorization) {
+      next();
+      return;
+    }
+    dependencies.authenticate(req, res, next);
+  };
+
+  router.get('/videos/:id([0-9a-fA-F-]+)', optionalAuthenticate, async (req: Request, res: Response, next) => {
+    const userId = (req as AuthenticatedRequest).user?.id;
+    if (!userId) {
+      next();
+      return;
+    }
     const id = z.string().uuid().safeParse(req.params.id);
     if (!id.success) {
       res.status(400).json({ error: 'Invalid video id' });
@@ -268,11 +336,12 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
     try {
       const video = await dependencies.repository.findVideo(id.data);
       if (!video || video.channel.userId !== userId) {
-        res.status(404).json({ error: 'Video not found' });
+        next();
         return;
       }
       res.status(200).json({
         videoId: video.id,
+        isShort: video.isShort,
         channelId: video.channelId,
         title: video.title,
         description: video.description,
@@ -310,6 +379,33 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
         res.status(409).json({ error: 'This video cannot be edited or published.' });
         return;
       }
+      if (video.status !== 'DRAFT' && parsed.data.isShort !== video.isShort) {
+        res.status(409).json({ error: 'The Short/standard format cannot change after upload starts.' });
+        return;
+      }
+      let publishedAssets: { thumbnailUrl: string; playlistUrls: Record<string, string> } | undefined;
+      if (video.status === 'PUBLISHED' && video.visibility === 'PRIVATE' && parsed.data.visibility !== 'PRIVATE') {
+        if (!video.copyrightDeclared || !video.copyrightDeclaredAt || !video.copyrightDeclaredById) {
+          res.status(409).json({ error: 'Declare that you own or have permission to upload this content before publishing.' });
+          return;
+        }
+        if (
+          video.copyrightReviewStatus === 'BLOCKED'
+          || await dependencies.repository.hasBlockingCopyrightClaim(video.id)
+        ) {
+          res.status(409).json({ error: 'Publication is blocked by a verified copyright claim.' });
+          return;
+        }
+        try {
+          publishedAssets = await dependencies.storage.publishAssets(
+            video.id,
+            video.thumbnailStorageKey || undefined,
+          );
+        } catch (error) {
+          sendStorageUnavailable(res, error);
+          return;
+        }
+      }
       const updated = await dependencies.repository.updateMetadata({
         videoId: id.data,
         userId,
@@ -318,6 +414,7 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
           description: parsed.data.description || null,
           tags: [...new Set(parsed.data.tags.map((tag) => tag.trim()))],
         },
+        ...(publishedAssets ? { publishedAssets } : {}),
       });
       if (!updated) {
         res.status(409).json({ error: 'Video metadata changed. Reload and retry.' });
@@ -352,7 +449,7 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
       return;
     }
 
-    const { videoId, contentType, fileSize } = parsed.data;
+    const { videoId, contentType, fileSize, duration, width, height } = parsed.data;
     let video: UploadVideo | null = null;
     try {
       video = await dependencies.repository.findVideo(videoId);
@@ -367,6 +464,25 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
     if (video.status !== 'DRAFT' || video.rawStorageKey) {
       res.status(409).json({ error: 'This draft is not awaiting a new upload.' });
       return;
+    }
+    if (video.isShort) {
+      if (fileSize > MAX_SHORT_UPLOAD_SIZE) {
+        res.status(400).json({ error: 'Shorts must be no larger than 1 GB.' });
+        return;
+      }
+      if (!duration || duration > MAX_SHORT_DURATION_SECONDS) {
+        res.status(400).json({ error: 'Shorts must be 3 minutes or shorter.' });
+        return;
+      }
+      if (!width || !height) {
+        res.status(400).json({ error: 'Short video dimensions could not be determined.' });
+        return;
+      }
+      const aspectRatio = width / height;
+      if (aspectRatio < 0.50625 || aspectRatio > 0.61875) {
+        res.status(400).json({ error: 'Choose a portrait video close to the 9:16 aspect ratio.' });
+        return;
+      }
     }
 
     let uploadTarget: { uploadUrl: string; fileKey: string };
@@ -493,6 +609,7 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
       if (
         !uploadedObject.contentLength
         || uploadedObject.contentLength > MAX_UPLOAD_SIZE
+        || (video.isShort && uploadedObject.contentLength > MAX_SHORT_UPLOAD_SIZE)
         || uploadedObject.contentLength !== Number(video.uploadFileSize)
         || uploadedObject.contentType !== video.uploadContentType
         || !ALLOWED_CONTENT_TYPES.some((contentType) => contentType === uploadedObject.contentType)
@@ -595,7 +712,11 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
         dependencies.queue.add(
           'processVideo',
           { videoId: video.id, rawStorageKey },
-          { jobId },
+          {
+            jobId,
+            attempts: PROCESSING_JOB_ATTEMPTS,
+            backoff: { type: 'exponential', delay: PROCESSING_RETRY_DELAY_MS },
+          },
         ),
         new Promise<never>((_resolve, reject) => {
           queueTimeout = setTimeout(() => reject(new Error('Video processing queue timed out')), QUEUE_ADD_TIMEOUT_MS);
@@ -682,6 +803,7 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
         video.pendingThumbnailStorageKey,
         parsed.data.contentType,
         parsed.data.fileSize,
+        video.isShort,
       );
       if (!exists) {
         res.status(409).json({ error: 'Uploaded thumbnail was not found. Retry the upload.' });
@@ -757,6 +879,15 @@ export function createVideoUploadRouter(dependencies: VideoUploadRouteDependenci
         res.status(409).json({ error: 'Video could not be published. Reload and retry.' });
         return;
       }
+      void emitPlatformEvent({
+        eventId: randomUUID(),
+        eventType: 'VIDEO_PUBLISHED',
+        userId: video.channel.userId,
+        videoId: video.id,
+        videoTitle: video.title,
+        channelId: video.channelId,
+        timestamp: new Date(),
+      });
       res.status(200).json({
         videoId: video.id,
         status: 'PUBLISHED',

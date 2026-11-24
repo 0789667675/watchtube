@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "WatchTube",
+    "slug": "watchtube-mobile",
+    "scheme": "watchtube",
+    "version": "1.0.0",
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.watchtube.viewer"
+    },
+    "android": {
+      "package": "com.watchtube.viewer",
+      "softwareKeyboardLayoutMode": "resize"
+    },
+    "plugins": [
+      "expo-router"
+    ]
+  }
+}

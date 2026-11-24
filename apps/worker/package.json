@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "node scripts/dev-local.cjs",
-    "test": "node -r ts-node/register --test tests/worker.reliability.test.ts",
+    "storage:check": "node scripts/storage-check.cjs",
+    "media:check": "node scripts/media-check.cjs",
+    "test": "node -r ts-node/register --test tests/worker.reliability.test.ts tests/worker.emailOutbox.test.ts",
     "start": "node scripts/start.cjs"
   },
   "dependencies": {

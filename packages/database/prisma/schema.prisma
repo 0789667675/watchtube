@@ -4,8 +4,8 @@ generator client {
 
 datasource db {
   provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DATABASE_URL_UNPOOLED")
+  url       = env("WATCHTUBE_DATABASE_URL")
+  directUrl = env("WATCHTUBE_DIRECT_URL")
 }
 
 enum Role {
@@ -13,6 +13,8 @@ enum Role {
   CREATOR
   MODERATOR
   ADMIN
+  SUPER_ADMIN
+  USER
 }
 
 enum UserStatus {
@@ -41,6 +43,23 @@ model User {
   reviewedCopyrightClaims CopyrightClaim[] @relation("CopyrightClaimReviews")
   copyrightDeclaredVideos Video[] @relation("VideoCopyrightDeclarations")
   strikes      UserStrike[]
+  shortsMonetizationSettings ShortsMonetizationSetting[] @relation("ShortsRateSettingEditor")
+  shortsMonetizationRateChanges ShortsMonetizationRateAudit[] @relation("ShortsRateAuditActor")
+  adminPosition AdminPosition? @relation("UserAdminPosition")
+  sentAdminInvitations AdminInvitation[] @relation("AdminInvitedBy")
+  acceptedAdminInvitation AdminInvitation? @relation("AdminAcceptedBy")
+  assignedSupportCases SupportCase[] @relation("AssignedAdminCases")
+  createdSupportCases SupportCase[] @relation("CreatedSupportCases")
+  resolvedSupportCases SupportCase[] @relation("ResolvedSupportCases")
+  userSupportCases SupportCase[] @relation("UserSupportCases")
+  supportCaseNotes SupportCaseNote[] @relation("CaseNoteAuthor")
+  supportCaseActivities SupportCaseActivity[] @relation("CaseActivityActor")
+  requestedApprovals ApprovalRequest[] @relation("ApprovalRequester")
+  reviewedApprovals ApprovalRequest[] @relation("ApprovalReviewer")
+  adminAuditLogs AdminAuditLog[] @relation("AuditLogActor")
+  paymentTransactions PaymentTransaction[]
+  notifications Notification[]
+  notificationPreference NotificationPreference?
 }
 
 model LegacyUser {
@@ -72,6 +91,11 @@ model Channel {
   subscribers     Subscription[] @relation("ChannelSubscribers")
   isMonetized     Boolean @default(false)
   wtppApplication WtppApplication?
+  supportCases    SupportCase[]
+  paymentTransactions       PaymentTransaction[]
+  adRevenueAttributionLines AdRevenueAttributionLine[]
+
+  @@unique([userId])
 }
 
 enum VideoStatus {
@@ -122,6 +146,7 @@ model Video {
   id                 String       @id @default(uuid()) @db.Uuid
   channelId          String       @db.Uuid
   channel            Channel      @relation(fields: [channelId], references: [id])
+  isShort            Boolean      @default(false)
   title              String
   description        String?
   rawStorageKey      String?
@@ -157,8 +182,11 @@ model Video {
   adEvents           AdEvent[]
   escrowHolds        EscrowHold[]
   copyrightClaims    CopyrightClaim[]
+  supportCases       SupportCase[]
+  adRevenueAttributionLines AdRevenueAttributionLine[]
 
   @@index([status, visibility, createdAt])
+  @@index([isShort, status, visibility, createdAt])
 }
 
 model VideoVariant {
@@ -187,6 +215,7 @@ model WalletTransaction {
   referenceId      String          @unique
   createdAt        DateTime        @default(now())
   status           WalletStatus    @default(PENDING)
+  adRevenueAttributionLine AdRevenueAttributionLine?
 }
 
 model VideoLike {
@@ -365,6 +394,14 @@ enum AdEventType {
   AD_SERVED
   AD_VIEWABLE
   AD_CLICK
+  AD_LOADED
+  AD_IMPRESSION
+  AD_FIRST_QUARTILE
+  AD_MIDPOINT
+  AD_THIRD_QUARTILE
+  AD_COMPLETED
+  AD_SKIPPED
+  AD_ERROR
 }
 
 model AdEvent {
@@ -377,7 +414,16 @@ model AdEvent {
   provider          String
   grossRevenueCents BigInt      @default(0)
   ipHash            String
+  sessionId         String?
+  placement         String?
+  adId              String?
+  errorCode         String?
+  playbackTimeSeconds Float?
   createdAt         DateTime    @default(now())
+
+  @@index([sessionId])
+  @@index([videoId, eventType])
+  @@index([createdAt])
 }
 
 enum ReconStatus {
@@ -396,6 +442,7 @@ model RevenueReconciliation {
   status                    ReconStatus @default(ESTIMATED)
   finalizedAt               DateTime?
   createdAt                 DateTime    @default(now())
+  attributionLines          AdRevenueAttributionLine[]
 }
 
 enum EscrowStatus {
@@ -418,12 +465,413 @@ model EscrowHold {
 }
 
 model AdProviderConfig {
-  id         String   @id @default(uuid()) @db.Uuid
-  name       String   @unique
-  vastTagUrl String
-  priority   Int      @default(1)
-  isEnabled  Boolean  @default(true)
-  format     String   @default("PRE_ROLL")
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id                  String   @id @default(uuid()) @db.Uuid
+  name                String   @unique
+  vastTagUrl          String
+  priority            Int      @default(1)
+  isEnabled           Boolean  @default(true)
+  format              String   @default("PRE_ROLL")
+  providerType        String   @default("VAST_GENERIC")
+  supportedPlacements String[] @default(["PRE_ROLL"])
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model ShortsMonetizationSetting {
+  id             String   @id @default("global")
+  rateBasisPoints Int     @default(3000)
+  updatedById    String?  @db.Uuid
+  updatedBy      User?    @relation("ShortsRateSettingEditor", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedAt      DateTime @updatedAt
+}
+
+model ShortsMonetizationRateAudit {
+  id                      String   @id @default(uuid()) @db.Uuid
+  actorId                 String   @db.Uuid
+  actor                   User     @relation("ShortsRateAuditActor", fields: [actorId], references: [id])
+  previousRateBasisPoints Int
+  newRateBasisPoints      Int
+  changedAt               DateTime @default(now())
+
+  @@index([changedAt])
+}
+
+enum AdminPositionStatus {
+  VACANT
+  OCCUPIED
+  SUSPENDED
+}
+
+model AdminPosition {
+  positionNumber Int                 @id
+  status         AdminPositionStatus @default(VACANT)
+  userId         String?             @unique @db.Uuid
+  user           User?               @relation("UserAdminPosition", fields: [userId], references: [id], onDelete: SetNull)
+  assignment     String?
+  assignedAt     DateTime?
+  permissions    String[]            @default([])
+  updatedAt      DateTime            @updatedAt
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+model AdminInvitation {
+  id                String           @id @default(uuid()) @db.Uuid
+  email             String
+  positionNumber    Int
+  assignment        String
+  customPermissions String[]         @default([])
+  tokenHash         String           @unique
+  status            InvitationStatus @default(PENDING)
+  invitedById       String           @db.Uuid
+  invitedBy         User             @relation("AdminInvitedBy", fields: [invitedById], references: [id])
+  acceptedById      String?          @unique @db.Uuid
+  acceptedBy        User?            @relation("AdminAcceptedBy", fields: [acceptedById], references: [id])
+  expiresAt         DateTime
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([email])
+  @@index([status])
+}
+
+enum SupportCaseCategory {
+  ONBOARDING
+  CHANNEL_ISSUE
+  STUDIO_SUPPORT
+  UPLOAD_ISSUE
+  PROCESSING_FAILURE
+  METADATA_THUMBNAIL
+  SUBSCRIPTION_INQUIRY
+  MONETIZATION_SUPPORT
+  USER_COMPLAINT
+  CONTENT_REPORT
+  PAYOUT_STATUS
+  OTHER
+}
+
+enum SupportCasePriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum SupportCaseStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  WAITING_FOR_USER
+  ESCALATED
+  RESOLVED
+  CLOSED
+}
+
+model SupportCase {
+  id                     String              @id @default(uuid()) @db.Uuid
+  caseReference          String              @unique
+  creatorOrUserId        String?             @db.Uuid
+  creatorOrUser          User?               @relation("UserSupportCases", fields: [creatorOrUserId], references: [id], onDelete: SetNull)
+  channelId              String?             @db.Uuid
+  channel                Channel?            @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  videoId                String?             @db.Uuid
+  video                  Video?              @relation(fields: [videoId], references: [id], onDelete: SetNull)
+  reporterEmail          String?
+  category               SupportCaseCategory @default(OTHER)
+  priority               SupportCasePriority @default(NORMAL)
+  status                 SupportCaseStatus   @default(OPEN)
+  title                  String
+  description            String
+  assignedAdminId        String?             @db.Uuid
+  assignedAdmin          User?               @relation("AssignedAdminCases", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  assignedPositionNumber Int?
+  createdById            String?             @db.Uuid
+  createdBy              User?               @relation("CreatedSupportCases", fields: [createdById], references: [id], onDelete: SetNull)
+  resolvedById           String?             @db.Uuid
+  resolvedBy             User?               @relation("ResolvedSupportCases", fields: [resolvedById], references: [id], onDelete: SetNull)
+  resolutionNotes        String?
+  resolvedAt             DateTime?
+  escalatedAt            DateTime?
+  escalationReason       String?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+  notes                  SupportCaseNote[]
+  activities             SupportCaseActivity[]
+
+  @@index([status, priority, createdAt])
+  @@index([assignedAdminId])
+  @@index([channelId])
+  @@index([creatorOrUserId])
+}
+
+model SupportCaseNote {
+  id         String      @id @default(uuid()) @db.Uuid
+  caseId     String      @db.Uuid
+  case       SupportCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  authorId   String      @db.Uuid
+  author     User        @relation("CaseNoteAuthor", fields: [authorId], references: [id])
+  content    String
+  isInternal Boolean     @default(true)
+  createdAt  DateTime    @default(now())
+
+  @@index([caseId, createdAt])
+}
+
+model SupportCaseActivity {
+  id            String      @id @default(uuid()) @db.Uuid
+  caseId        String      @db.Uuid
+  case          SupportCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  actorId       String      @db.Uuid
+  actor         User        @relation("CaseActivityActor", fields: [actorId], references: [id])
+  action        String
+  details       String?
+  previousValue String?
+  newValue      String?
+  createdAt     DateTime    @default(now())
+
+  @@index([caseId, createdAt])
+}
+
+enum ApprovalRequestType {
+  GLOBAL_MONETIZATION_CHANGE
+  FINANCIAL_ADJUSTMENT
+  SECURITY_POLICY_CHANGE
+  PLATFORM_CONFIG_CHANGE
+  OTHER
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model ApprovalRequest {
+  id            String              @id @default(uuid()) @db.Uuid
+  requesterId   String              @db.Uuid
+  requester     User                @relation("ApprovalRequester", fields: [requesterId], references: [id])
+  type          ApprovalRequestType
+  title         String
+  description   String
+  payload       Json?
+  status        ApprovalStatus      @default(PENDING)
+  reviewedById  String?             @db.Uuid
+  reviewedBy    User?               @relation("ApprovalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewerNotes String?
+  reviewedAt    DateTime?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@index([status, createdAt])
+  @@index([requesterId])
+}
+
+model AdminAuditLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  actorId        String   @db.Uuid
+  actor          User     @relation("AuditLogActor", fields: [actorId], references: [id])
+  actorRole      String
+  action         String
+  targetResource String
+  targetId       String?
+  outcome        String   @default("SUCCESS")
+  metadata       Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId])
+  @@index([action])
+  @@index([targetResource])
+}
+
+enum MobileMoneyProvider {
+  MTN_MOMO
+  AIRTEL_MONEY
+}
+
+enum PaymentTransactionKind {
+  PAYMENT
+  PAYOUT
+  REFUND
+}
+
+enum PaymentTransactionStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+  REVERSED
+  REFUNDED
+  EXPIRED
+}
+
+model PaymentTransaction {
+  id                     String                   @id @default(uuid()) @db.Uuid
+  transactionId          String                   @unique
+  kind                   PaymentTransactionKind
+  provider               MobileMoneyProvider
+  ownerScope             String
+  userId                 String                   @db.Uuid
+  user                   User                     @relation(fields: [userId], references: [id])
+  channelId              String?                  @db.Uuid
+  channel                Channel?                 @relation(fields: [channelId], references: [id])
+  amountCents            BigInt
+  currency               String                   @default("RWF")
+  msisdnHash             String
+  maskedPhone            String
+  idempotencyKey         String
+  providerReference      String?
+  providerTransactionId  String?
+  status                 PaymentTransactionStatus @default(PENDING)
+  reconciliationRequired Boolean                  @default(false)
+  failureReason          String?
+  parentTransactionId    String?
+  parentTransaction      PaymentTransaction?      @relation("PaymentParentChild", fields: [parentTransactionId], references: [transactionId], onDelete: Restrict)
+  childTransactions      PaymentTransaction[]     @relation("PaymentParentChild")
+  webhookEvents          PaymentWebhookEvent[]
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
+  finalizedAt            DateTime?
+
+  @@unique([kind, ownerScope, idempotencyKey])
+  @@unique([provider, providerReference])
+  @@index([provider, providerTransactionId])
+  @@index([userId, createdAt])
+  @@index([channelId, createdAt])
+  @@index([status, reconciliationRequired])
+  @@index([parentTransactionId])
+}
+
+model PaymentWebhookEvent {
+  id                   String                    @id @default(uuid()) @db.Uuid
+  provider             MobileMoneyProvider
+  webhookEventId       String
+  providerReference    String?
+  paymentTransactionId String?                   @db.Uuid
+  paymentTransaction   PaymentTransaction?       @relation(fields: [paymentTransactionId], references: [id], onDelete: SetNull)
+  payloadSha256        String
+  reportedStatus       PaymentTransactionStatus?
+  signatureVerified    Boolean                   @default(true)
+  processedAt          DateTime                  @default(now())
+
+  @@unique([provider, webhookEventId])
+  @@index([provider, providerReference])
+  @@index([paymentTransactionId])
+  @@index([processedAt])
+}
+
+enum AdRevenueAttributionStatus {
+  VERIFIED_CREDITED
+  VERIFIED_ESCROW_HELD
+  VERIFIED_ZERO_NET
+  REJECTED_DUPLICATE
+  REJECTED_UNMATCHED_TELEMETRY
+  REJECTED_UNELIGIBLE
+}
+
+model AdRevenueAttributionLine {
+  id                           String                     @id @default(uuid()) @db.Uuid
+  reconciliationId             String                     @db.Uuid
+  reconciliation               RevenueReconciliation      @relation(fields: [reconciliationId], references: [id])
+  provider                     String
+  periodMonth                  String
+  externalReportId             String
+  videoId                      String                     @db.Uuid
+  video                        Video                      @relation(fields: [videoId], references: [id])
+  channelId                    String                     @db.Uuid
+  channel                      Channel                    @relation(fields: [channelId], references: [id])
+  sessionId                    String?
+  isShort                      Boolean
+  reportedGrossRevenueCents    BigInt
+  providerFeeCents             BigInt                     @default(0)
+  invalidTrafficDeductionCents BigInt                     @default(0)
+  verifiedNetRevenueCents      BigInt
+  appliedCreatorShareBps       Int
+  appliedShortsRateBps         Int?
+  standardCreatorShareCents    BigInt
+  creatorAttributableCents     BigInt
+  platformAttributableCents    BigInt
+  escrowWithheldCents          BigInt                     @default(0)
+  ledgerReferenceId            String?                    @unique
+  walletTransaction            WalletTransaction?         @relation(fields: [ledgerReferenceId], references: [referenceId], onDelete: Restrict)
+  status                       AdRevenueAttributionStatus
+  rejectionReason              String?
+  createdAt                    DateTime                   @default(now())
+
+  @@unique([provider, periodMonth, externalReportId])
+  @@index([reconciliationId])
+  @@index([channelId, periodMonth])
+  @@index([videoId, periodMonth])
+}
+
+model Notification {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  message   String
+  metadata  Json?
+  isRead    Boolean   @default(false)
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, isRead, createdAt])
+}
+
+enum EmailOutboxStatus {
+  PENDING
+  PROCESSING
+  SENT
+  RETRYABLE_FAILURE
+  PERMANENT_FAILURE
+}
+
+model EmailOutbox {
+  id             String            @id @default(uuid()) @db.Uuid
+  idempotencyKey String            @unique
+  to             String
+  from           String?
+  subject        String
+  text           String
+  html           String?
+  templateId     String?
+  metadata       Json?
+  status         EmailOutboxStatus @default(PENDING)
+  attempts       Int               @default(0)
+  maxAttempts    Int               @default(5)
+  nextAttemptAt  DateTime          @default(now())
+  lastAttemptAt  DateTime?
+  sentAt         DateTime?
+  lastError      String?
+  transportName  String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([createdAt])
+}
+
+model NotificationPreference {
+  id                         String   @id @default(uuid()) @db.Uuid
+  userId                     String   @unique @db.Uuid
+  user                       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailSecurityAlerts        Boolean  @default(true)
+  emailFinancialTransfers    Boolean  @default(true)
+  emailWtppUpdates           Boolean  @default(true)
+  emailVideoProcessing       Boolean  @default(true)
+  emailPlatformAnnouncements Boolean  @default(true)
+  inAppFinancialAlerts       Boolean  @default(true)
+  inAppVideoProcessing       Boolean  @default(true)
+  inAppPlatformAnnouncements Boolean  @default(true)
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
 }

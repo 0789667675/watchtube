@@ -8,9 +8,11 @@ const node_http_1 = require("node:http");
 const express_1 = __importDefault(require("express"));
 const node_test_1 = require("node:test");
 const trust_route_1 = require("../src/routes/trust.route");
+const wtppPii_1 = require("../src/security/wtppPii");
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const CHANNEL_ID = '22222222-2222-4222-8222-222222222222';
 let activeServers = [];
+const previousEncryptionKey = process.env.WTPP_PII_ENCRYPTION_KEY;
 async function startServer(repository) {
     const app = (0, express_1.default)();
     app.use(express_1.default.json());
@@ -67,6 +69,10 @@ function createRepository() {
         server.close((error) => error ? reject(error) : resolve());
     })));
     activeServers = [];
+    if (previousEncryptionKey === undefined)
+        delete process.env.WTPP_PII_ENCRYPTION_KEY;
+    else
+        process.env.WTPP_PII_ENCRYPTION_KEY = previousEncryptionKey;
 });
 (0, node_test_1.test)('creators below legacy thresholds may apply and repeat applications after rejection', async () => {
     const state = createRepository();
@@ -132,4 +138,45 @@ function createRepository() {
         headers: { 'x-test-user': USER_ID },
     });
     strict_1.default.equal(unownedChannel.status, 404);
+});
+(0, node_test_1.test)('WTPP identity fields are encrypted before persistence and omitted from responses', async () => {
+    process.env.WTPP_PII_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
+    const state = createRepository();
+    const baseUrl = await startServer(state.repository);
+    const headers = { 'content-type': 'application/json', 'x-test-user': USER_ID };
+    const response = await fetch(`${baseUrl}/api/v1/wtpp/apply`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+            channelId: CHANNEL_ID,
+            taxId: 'private-tax-id',
+            nationalIdOrPassport: 'private-identity-document',
+        }),
+    });
+    strict_1.default.equal(response.status, 201);
+    strict_1.default.deepEqual(await response.json(), {
+        status: 'PENDING',
+        reviewerNotes: null,
+        reviewedAt: null,
+    });
+    const stored = state.getSubmittedInput();
+    strict_1.default.notEqual(stored.taxId, 'private-tax-id');
+    strict_1.default.notEqual(stored.nationalIdOrPassport, 'private-identity-document');
+    strict_1.default.equal((0, wtppPii_1.decryptWtppPii)(stored.taxId, 'taxId'), 'private-tax-id');
+    strict_1.default.equal((0, wtppPii_1.decryptWtppPii)(stored.nationalIdOrPassport, 'nationalIdOrPassport'), 'private-identity-document');
+});
+(0, node_test_1.test)('WTPP identity submission fails closed when encryption is not configured', async () => {
+    delete process.env.WTPP_PII_ENCRYPTION_KEY;
+    const state = createRepository();
+    const baseUrl = await startServer(state.repository);
+    const response = await fetch(`${baseUrl}/api/v1/wtpp/apply`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-test-user': USER_ID },
+        body: JSON.stringify({ channelId: CHANNEL_ID, taxId: 'private-tax-id' }),
+    });
+    strict_1.default.equal(response.status, 503);
+    strict_1.default.deepEqual(await response.json(), {
+        error: 'Sensitive identity encryption is not configured.',
+    });
+    strict_1.default.equal(state.getSubmitCount(), 0);
 });

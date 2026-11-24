@@ -3,7 +3,9 @@ import axios from 'axios';
 import { Link, useOutletContext } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { apiClient, getApiErrorMessage } from '../../api/apiClient';
+import { SignInLink } from '../../components/account/SignInLink';
 import {
+  getChannelImageUploadErrorMessage,
   ChannelImageUploadError,
   uploadChannelImage,
 } from '../../api/channelImageUpload';
@@ -223,11 +225,15 @@ export function SettingsPage() {
       saveConfirmedImage(channelId, purpose, confirmation);
     } catch (uploadError) {
       const workflowError = uploadError instanceof ChannelImageUploadError ? uploadError : null;
-      const cause = workflowError?.originalError ?? uploadError;
       updateImageUpload(purpose, (current) => ({
         ...current,
         phase: 'error',
-        error: getApiErrorMessage(cause, 'The image upload could not be completed.'),
+        error: workflowError
+          ? getChannelImageUploadErrorMessage(
+            workflowError,
+            'The image upload could not be completed.',
+          )
+          : getApiErrorMessage(uploadError, 'The image upload could not be completed.'),
         uploadToken: workflowError?.stage === 'confirmation'
           ? workflowError.intent?.uploadToken
           : undefined,
@@ -375,7 +381,7 @@ export function SettingsPage() {
           <div role="alert" className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-control bg-surface-subtle p-4">
             <p className="text-sm text-text-muted">{currentResult.message}</p>
             {currentResult.unauthorized ? (
-              <Link to="/auth/login" className="text-sm font-semibold text-brand-dark hover:underline">Sign in again</Link>
+              <SignInLink className="text-sm font-semibold text-brand-dark hover:underline">Sign in again</SignInLink>
             ) : (
               <button
                 type="button"

@@ -89,12 +89,18 @@ export async function processChannelImage(
   }
 }
 
-export async function processVideoThumbnail(input: Buffer, contentType: string): Promise<Buffer> {
+export async function processVideoThumbnail(
+  input: Buffer,
+  contentType: string,
+  isShort = false,
+): Promise<Buffer> {
   const expectedFormat = VIDEO_THUMBNAIL_FORMATS[contentType];
   if (!expectedFormat || input.length === 0 || input.length > VIDEO_THUMBNAIL_MAX_FILE_SIZE) {
     throw new InvalidChannelImageError('Choose a JPEG, PNG, or WebP thumbnail no larger than 5 MB.');
   }
 
+  const minimumWidth = isShort ? 180 : 320;
+  const minimumHeight = isShort ? 320 : 180;
   try {
     const image = sharp(input, {
       failOn: 'error',
@@ -102,6 +108,9 @@ export async function processVideoThumbnail(input: Buffer, contentType: string):
       sequentialRead: true,
     });
     const metadata = await image.metadata();
+    const orientationSwapsDimensions = [5, 6, 7, 8].includes(metadata.orientation ?? 1);
+    const displayWidth = orientationSwapsDimensions ? metadata.height : metadata.width;
+    const displayHeight = orientationSwapsDimensions ? metadata.width : metadata.height;
     if (
       metadata.format !== expectedFormat
       || !metadata.width
@@ -110,17 +119,30 @@ export async function processVideoThumbnail(input: Buffer, contentType: string):
       || metadata.width > MAX_IMAGE_DIMENSION
       || metadata.height > MAX_IMAGE_DIMENSION
       || metadata.width * metadata.height > MAX_IMAGE_PIXELS
-      || metadata.width < 320
-      || metadata.height < 180
+      || !displayWidth
+      || !displayHeight
+      || displayWidth < minimumWidth
+      || displayHeight < minimumHeight
+      || (
+        isShort
+        && (displayWidth / displayHeight < 0.50625 || displayWidth / displayHeight > 0.61875)
+      )
     ) {
       throw new InvalidChannelImageError(
-        'Thumbnail must be a valid JPEG, PNG, or WebP image at least 320 by 180 pixels.',
+        isShort
+          ? 'Short thumbnails must be valid JPEG, PNG, or WebP portrait images with a 9:16 aspect ratio and at least 180 by 320 pixels.'
+          : 'Thumbnail must be a valid JPEG, PNG, or WebP image at least 320 by 180 pixels.',
       );
     }
 
     return await image
       .rotate()
-      .resize({ width: 1280, height: 720, fit: 'cover', position: 'centre' })
+      .resize({
+        width: isShort ? 720 : 1280,
+        height: isShort ? 1280 : 720,
+        fit: 'cover',
+        position: 'centre',
+      })
       .webp({ quality: 82, effort: 4 })
       .toBuffer();
   } catch (error) {

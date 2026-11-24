@@ -14,13 +14,14 @@ let activeServers = [];
 function createRepository() {
     let status = 'PENDING';
     let reviewerNotes = null;
+    const reviewedAt = null;
     const repository = {
         async reviewPendingApplication(input) {
             if (status !== 'PENDING')
                 return null;
             status = input.status;
             reviewerNotes = input.reviewerNotes;
-            return { id: input.applicationId, status, reviewerNotes };
+            return Object.assign({ id: input.applicationId, status, reviewerNotes, reviewedAt }, { taxId: 'private-tax-id', nationalIdOrPassport: 'private-identity-document' });
         },
     };
     return { repository, getStatus: () => status };
@@ -94,6 +95,7 @@ async function startServer(repository) {
         id: APPLICATION_ID,
         status: 'REJECTED',
         reviewerNotes: 'Please verify channel ownership.',
+        reviewedAt: null,
     });
     const repeatedReview = await fetch(path, {
         method: 'PATCH',

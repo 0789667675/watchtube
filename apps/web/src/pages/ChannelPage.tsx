@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { CheckCircle2, Flag } from 'lucide-react';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { apiClient, getApiErrorMessage } from '../api/apiClient';
+import { SignInLink } from '../components/account/SignInLink';
 import { ReportModal } from '../components/modals/ReportModal';
 import { VideoCard } from '../components/video/VideoCard';
 import { EmptyState, ErrorState, LoadingState } from '../components/video/ViewerState';
@@ -192,9 +193,9 @@ export function ChannelPage() {
               </div>
               <div className="flex shrink-0 flex-wrap items-center gap-2">
                 {subscriptionState === 'signed-out' ? (
-                  <Link to="/auth/login" className="inline-flex justify-center rounded-full bg-brand-action px-5 py-2.5 font-semibold text-brand-foreground hover:bg-brand-action-hover">
+                  <SignInLink className="inline-flex justify-center rounded-full bg-brand-action px-5 py-2.5 font-semibold text-brand-foreground hover:bg-brand-action-hover">
                     Sign in to subscribe
-                  </Link>
+                  </SignInLink>
                 ) : (
                   <button
                     type="button"

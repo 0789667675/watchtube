@@ -3,12 +3,22 @@ import { z } from 'zod';
 
 export type WtppReviewDecision = 'APPROVED' | 'REJECTED';
 
+export interface WtppReviewApplication {
+  id: string;
+  status: WtppReviewDecision;
+  reviewerNotes: string | null;
+  reviewedAt: Date | null;
+}
+
 export interface WtppReviewRepository {
   reviewPendingApplication(input: {
     applicationId: string;
     status: WtppReviewDecision;
     reviewerNotes: string | null;
-  }): Promise<unknown | null>;
+    reviewerId?: string;
+    reviewerRole?: string;
+    req?: Request;
+  }): Promise<WtppReviewApplication | null>;
 }
 
 const reviewSchema = z.object({
@@ -40,12 +50,20 @@ export function createWtppReviewRouter(repository: WtppReviewRepository): expres
         applicationId: applicationId.data,
         status: decision.data.status,
         reviewerNotes: decision.data.reviewerNotes || null,
+        reviewerId: (req as any).user?.id,
+        reviewerRole: (req as any).user?.role,
+        req,
       });
       if (!application) {
         res.status(409).json({ error: 'Only pending applications can be reviewed.' });
         return;
       }
-      res.status(200).json(application);
+      res.status(200).json({
+        id: application.id,
+        status: application.status,
+        reviewerNotes: application.reviewerNotes,
+        reviewedAt: application.reviewedAt,
+      });
     } catch (error) {
       console.error('WTPP application review failed.', {
         name: error instanceof Error ? error.name : 'UnknownError',

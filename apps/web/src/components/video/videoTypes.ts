@@ -11,6 +11,7 @@ export interface ViewerChannel {
 
 export interface ViewerVideo {
   id: string;
+  isShort?: boolean;
   title: string;
   description?: string | null;
   thumbnailUrl?: string | null;

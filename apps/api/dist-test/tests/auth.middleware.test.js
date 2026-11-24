@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const strict_1 = __importDefault(require("node:assert/strict"));
 const node_http_1 = require("node:http");
 const express_1 = __importDefault(require("express"));
+const cookie_parser_1 = __importDefault(require("cookie-parser"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const node_test_1 = require("node:test");
 const auth_1 = require("../src/middleware/auth");
@@ -15,6 +16,7 @@ const token = jsonwebtoken_1.default.sign({ id: USER_ID, role: 'ADMIN' }, jwt_1.
 let activeServers = [];
 async function startServer(findUser) {
     const app = (0, express_1.default)();
+    app.use((0, cookie_parser_1.default)());
     app.get('/protected', (0, auth_1.createAuthenticate)(findUser), (req, res) => {
         res.status(200).json(req.user);
     });
@@ -27,6 +29,11 @@ async function startServer(findUser) {
 async function getProtected(baseUrl) {
     return fetch(`${baseUrl}/protected`, {
         headers: { authorization: `Bearer ${token}` },
+    });
+}
+async function getProtectedWithCookie(baseUrl, value) {
+    return fetch(`${baseUrl}/protected`, {
+        headers: { cookie: `token=${value}` },
     });
 }
 (0, node_test_1.afterEach)(async () => {
@@ -57,6 +64,29 @@ async function getProtected(baseUrl) {
     const baseUrl = await startServer(async () => null);
     const response = await getProtected(baseUrl);
     strict_1.default.equal(response.status, 401);
+});
+(0, node_test_1.test)('authentication restores an account from the session cookie', async () => {
+    const sessionToken = jsonwebtoken_1.default.sign({ id: USER_ID }, jwt_1.JWT_SECRET, { expiresIn: '1h' });
+    let lookedUpUserId = '';
+    const baseUrl = await startServer(async (id) => {
+        lookedUpUserId = id;
+        return { id, role: 'VIEWER', status: 'GOOD_STANDING' };
+    });
+    const response = await getProtectedWithCookie(baseUrl, sessionToken);
+    strict_1.default.equal(response.status, 200);
+    strict_1.default.equal(lookedUpUserId, USER_ID);
+    strict_1.default.deepEqual(await response.json(), { id: USER_ID, role: 'VIEWER' });
+});
+(0, node_test_1.test)('authentication rejects an expired session cookie', async () => {
+    const expiredToken = jsonwebtoken_1.default.sign({ id: USER_ID }, jwt_1.JWT_SECRET, { expiresIn: -1 });
+    let lookedUpUser = false;
+    const baseUrl = await startServer(async () => {
+        lookedUpUser = true;
+        return { id: USER_ID, role: 'VIEWER', status: 'GOOD_STANDING' };
+    });
+    const response = await getProtectedWithCookie(baseUrl, expiredToken);
+    strict_1.default.equal(response.status, 401);
+    strict_1.default.equal(lookedUpUser, false);
 });
 (0, node_test_1.test)('authentication reports database lookup failures instead of accepting stale claims', async () => {
     const originalError = console.error;

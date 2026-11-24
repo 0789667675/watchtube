@@ -8,17 +8,20 @@ function loadEnvFile(filePath) {
 }
 
 const packageEnv = path.resolve(__dirname, '../.env');
-const rootEnv = path.resolve(__dirname, '../../../.env');
 try {
   loadEnvFile(packageEnv);
 } catch (error) {
   if (error.code !== 'ENOENT') throw error;
 }
-try {
-  loadEnvFile(rootEnv);
-} catch (error) {
-  if (error.code !== 'ENOENT') throw error;
+if (!process.env.WATCHTUBE_DATABASE_URL?.trim()) {
+  throw new Error('Local worker development requires WATCHTUBE_DATABASE_URL for the least-privilege worker role.');
 }
+process.env.DATABASE_URL = process.env.WATCHTUBE_DATABASE_URL;
+delete process.env.DATABASE_URL_UNPOOLED;
+delete process.env.WATCHTUBE_DIRECT_URL;
+if (!process.env.NODE_ENV) process.env.NODE_ENV = 'development';
 
-require('ts-node/register');
+require('ts-node').register({
+  project: path.resolve(__dirname, '../tsconfig.json'),
+});
 require('../src/worker.ts').startWorker();

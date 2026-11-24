@@ -5,11 +5,14 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.trustRouter = void 0;
 exports.createWtppApplicationRouter = createWtppApplicationRouter;
+const node_crypto_1 = __importDefault(require("node:crypto"));
 const express_1 = __importDefault(require("express"));
 const zod_1 = require("zod");
 const database_1 = require("@watchtube/database");
 const auth_1 = require("../middleware/auth");
 const databaseErrors_1 = require("../config/databaseErrors");
+const wtppPii_1 = require("../security/wtppPii");
+const notifications_1 = require("../services/notifications");
 const trustRouter = express_1.default.Router();
 exports.trustRouter = trustRouter;
 function createWtppApplicationRouter(authenticate, repository) {
@@ -44,8 +47,8 @@ function createWtppApplicationRouter(authenticate, repository) {
     router.post('/wtpp/apply', authenticate, async (req, res) => {
         const applySchema = zod_1.z.object({
             channelId: zod_1.z.string().uuid().optional(),
-            taxId: zod_1.z.string().optional(),
-            nationalIdOrPassport: zod_1.z.string().optional(),
+            taxId: zod_1.z.string().max(256).optional(),
+            nationalIdOrPassport: zod_1.z.string().max(256).optional(),
         }).strict();
         const parsed = applySchema.safeParse(req.body);
         if (!parsed.success) {
@@ -53,7 +56,13 @@ function createWtppApplicationRouter(authenticate, repository) {
             return;
         }
         try {
-            const { channelId, ...applicationDetails } = parsed.data;
+            const { channelId, taxId, nationalIdOrPassport } = parsed.data;
+            const applicationDetails = {
+                ...(taxId === undefined ? {} : { taxId: (0, wtppPii_1.encryptWtppPii)(taxId, 'taxId') }),
+                ...(nationalIdOrPassport === undefined
+                    ? {}
+                    : { nationalIdOrPassport: (0, wtppPii_1.encryptWtppPii)(nationalIdOrPassport, 'nationalIdOrPassport') }),
+            };
             const channel = await repository.findCreatorChannel(req.user.id, channelId);
             if (!channel)
                 return res.status(404).json({ error: 'Channel not found' });
@@ -67,11 +76,24 @@ function createWtppApplicationRouter(authenticate, repository) {
             if (!application) {
                 return res.status(409).json({ error: 'Application already in progress or approved' });
             }
+            void (0, notifications_1.emitPlatformEvent)({
+                eventId: node_crypto_1.default.randomUUID(),
+                eventType: 'WTPP_APPLICATION_RECEIVED',
+                userId: req.user.id,
+                channelId: channel.id,
+                channelName: channel.name,
+                applicationId: application.id || channel.id,
+                timestamp: new Date(),
+            });
             res.status(201).json(application);
         }
         catch (error) {
             if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002') {
                 res.status(409).json({ error: 'Application already in progress or approved' });
+                return;
+            }
+            if (error instanceof wtppPii_1.WtppPiiConfigurationError) {
+                res.status(503).json({ error: 'Sensitive identity encryption is not configured.' });
                 return;
             }
             (0, databaseErrors_1.sendDatabaseErrorResponse)(res, error, 'Creator program application is temporarily unavailable because the database is unavailable.');

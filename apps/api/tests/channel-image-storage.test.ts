@@ -7,6 +7,7 @@ import type {
   ChannelImageStorageAdapter,
 } from '../src/services/storage.service';
 import { InvalidChannelImageError } from '../src/services/channel-image.service';
+import { StorageUnavailableError } from '../src/services/storage.service';
 
 const CHANNEL_ID = '33333333-3333-4333-8333-333333333333';
 const UPLOAD_ID = '55555555-5555-4555-8555-555555555555';
@@ -233,6 +234,39 @@ test('unsupported public media URL configuration is rejected before any object i
     /Public media URL configuration is invalid/,
   );
   assert.equal(publicWrites.length, 0);
+});
+
+test('missing public media URL reports configuration names before creating an upload target', async () => {
+  const bytes = await validAvatarPng();
+  const { calls } = await createHarness(bytes);
+  const storage = createChannelImageStorageService({
+    async createSignedUploadUrl(input) {
+      calls.signedTargets.push(input);
+      return 'https://upload.example/presigned';
+    },
+    async getObjectMetadata() { return null; },
+    async getObjectBytes() { return null; },
+    async putPublicObject(input) { calls.publicWrites.push(input); },
+  }, {
+    rawBucket: 'private-raw',
+    publicBucket: 'existing-public',
+    publicDomain: 'your_public_domain',
+  });
+
+  await assert.rejects(
+    storage.createUploadTarget({
+      channelId: CHANNEL_ID,
+      purpose: 'avatar',
+      contentType: 'image/png',
+      fileSize: 1024,
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof StorageUnavailableError);
+      assert.match(error.message, /R2_PUBLIC_DOMAIN or R2_BUCKET_PUBLIC_URL/);
+      return true;
+    },
+  );
+  assert.equal(calls.signedTargets.length, 0);
 });
 
 test('HTTP public domain configuration is served over HTTPS like the video worker', async () => {

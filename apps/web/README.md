@@ -36,9 +36,11 @@ pnpm dev:app
 
 Turbo manages both processes and stops them together. The API reads
 `apps/api/.env` and accepts only loopback PostgreSQL and Redis endpoints in this
-local-only command. The Vite `/api` proxy uses the API `PORT` from the shell or
-`apps/api/.env`, defaulting to 3001. The root `.env` is not used by this
-command; the development proxy rejects non-loopback targets.
+local-only command. The Vite `/api` proxy uses `API_PORT` from the shell or
+`apps/api/.env`, defaulting to 3001; it never uses the web server's generic
+`PORT`. The root `.env` is not used by this command. Local development proxies
+use IPv4 loopback (`127.0.0.1`) so Windows `localhost` resolution cannot route
+to IPv6 while the API is bound to IPv4.
 
 The applications can also be started independently:
 

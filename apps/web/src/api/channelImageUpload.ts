@@ -1,3 +1,4 @@
+import axios from 'axios';
 import {
   isStudioChannelImageConfirmation,
   isStudioChannelImageUploadIntent,
@@ -47,6 +48,28 @@ export class ChannelImageUploadError extends Error {
     this.originalError = originalError;
     this.intent = intent;
   }
+}
+
+export function getChannelImageUploadErrorMessage(
+  error: ChannelImageUploadError,
+  fallback: string,
+): string {
+  if (
+    error.stage === 'upload'
+    && axios.isAxiosError(error.originalError)
+    && !error.originalError.response
+  ) {
+    return 'The image could not be transferred to storage. Check your connection or storage configuration, then retry.';
+  }
+
+  if (
+    axios.isAxiosError<{ error?: unknown }>(error.originalError)
+    && typeof error.originalError.response?.data?.error === 'string'
+  ) {
+    return error.originalError.response.data.error;
+  }
+
+  return fallback;
 }
 
 export async function uploadChannelImage(

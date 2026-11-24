@@ -63,3 +63,24 @@ async function createPng(width, height) {
     await strict_1.default.rejects((0, channel_image_service_1.processVideoThumbnail)(await createPng(100, 100), 'image/png'), channel_image_service_1.InvalidChannelImageError);
     await strict_1.default.rejects((0, channel_image_service_1.processVideoThumbnail)(await createPng(640, 480), 'image/jpeg'), channel_image_service_1.InvalidChannelImageError);
 });
+(0, node_test_1.test)('Short thumbnails require portrait dimensions and normalize to a 720 by 1280 WebP', async () => {
+    const output = await (0, channel_image_service_1.processVideoThumbnail)(await createPng(360, 640), 'image/png', true);
+    const metadata = await (0, sharp_1.default)(output).metadata();
+    strict_1.default.equal(metadata.format, 'webp');
+    strict_1.default.equal(metadata.width, 720);
+    strict_1.default.equal(metadata.height, 1280);
+    const orientedJpeg = await (0, sharp_1.default)({
+        create: {
+            width: 640,
+            height: 360,
+            channels: 3,
+            background: { r: 12, g: 100, b: 220 },
+        },
+    }).jpeg().withMetadata({ orientation: 6 }).toBuffer();
+    const orientedOutput = await (0, channel_image_service_1.processVideoThumbnail)(orientedJpeg, 'image/jpeg', true);
+    const orientedMetadata = await (0, sharp_1.default)(orientedOutput).metadata();
+    strict_1.default.equal(orientedMetadata.width, 720);
+    strict_1.default.equal(orientedMetadata.height, 1280);
+    await strict_1.default.rejects((0, channel_image_service_1.processVideoThumbnail)(await createPng(640, 480), 'image/png', true), channel_image_service_1.InvalidChannelImageError);
+    await strict_1.default.rejects((0, channel_image_service_1.processVideoThumbnail)(await createPng(100, 300), 'image/png', true), channel_image_service_1.InvalidChannelImageError);
+});

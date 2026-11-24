@@ -23,7 +23,7 @@ function isValidAccountId(accountId: string | undefined): boolean {
     return hasConfiguredValue(accountId) && /^[a-f0-9]{32}$/i.test(accountId.trim());
 }
 
-export function getStorageConfigurationStatus(requirePublicMediaUrl = true): { missing: string[] } {
+export function getStorageConfigurationStatus(requirePublicMediaUrl = true): { status: 'configured' | 'unconfigured'; missing: string[] } {
     const missing = [
         ...(!isValidAccountId(process.env.CLOUDFLARE_ACCOUNT_ID) ? ['CLOUDFLARE_ACCOUNT_ID'] : []),
         ...['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']
@@ -40,33 +40,59 @@ export function getStorageConfigurationStatus(requirePublicMediaUrl = true): { m
         const bucket = process.env[name]?.trim();
         if (bucket && !isValidBucketName(bucket)) missing.push(name);
     }
-    return { missing };
+    return {
+        status: missing.length === 0 ? 'configured' : 'unconfigured',
+        missing,
+    };
+}
+
+function resolveLoopbackTestS3Endpoint(): string | undefined {
+    if (process.env.NODE_ENV === 'production') return undefined;
+    const raw = process.env.WATCHTUBE_TEST_S3_ENDPOINT?.trim();
+    if (!raw) return undefined;
+    let parsed: URL;
+    try {
+        parsed = new URL(raw);
+    } catch {
+        throw new Error('WATCHTUBE_TEST_S3_ENDPOINT must be a valid HTTP URL.');
+    }
+    if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1') {
+        throw new Error('WATCHTUBE_TEST_S3_ENDPOINT must target loopback 127.0.0.1.');
+    }
+    return parsed.origin;
 }
 
 export function getStorageClient(): S3Client {
-    if (!s3Client) {
-        const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-        const accessKeyId = process.env.R2_ACCESS_KEY_ID;
-        const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
-        const missing = [
-            ...(!isValidAccountId(accountId) ? ['CLOUDFLARE_ACCOUNT_ID'] : []),
-            ...['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']
-                .filter((name) => !hasConfiguredValue(process.env[name])),
-        ];
-        if (missing.length) {
-            throw new Error(`Cloud storage is not configured. Missing environment variables: ${missing.join(', ')}.`);
-        }
-        s3Client = new S3Client({
-            region: 'auto',
-            endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
-            credentials: {
-                accessKeyId: accessKeyId!,
-                secretAccessKey: secretAccessKey!,
-            },
-            maxAttempts: 3,
-        });
+    const testEndpoint = resolveLoopbackTestS3Endpoint();
+    if (s3Client && !testEndpoint) return s3Client;
+
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+    const accessKeyId = process.env.R2_ACCESS_KEY_ID;
+    const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+    const missing = [
+        ...(!isValidAccountId(accountId) ? ['CLOUDFLARE_ACCOUNT_ID'] : []),
+        ...['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']
+            .filter((name) => !hasConfiguredValue(process.env[name])),
+    ];
+    if (missing.length) {
+        throw new Error(`Cloud storage is not configured. Missing environment variables: ${missing.join(', ')}.`);
     }
-    return s3Client;
+    const client = new S3Client({
+        region: 'auto',
+        endpoint: testEndpoint ?? `https://${accountId}.r2.cloudflarestorage.com`,
+        ...(testEndpoint ? { forcePathStyle: true } : {}),
+        requestChecksumCalculation: 'WHEN_REQUIRED',
+        responseChecksumValidation: 'WHEN_REQUIRED',
+        credentials: {
+            accessKeyId: accessKeyId!,
+            secretAccessKey: secretAccessKey!,
+        },
+        maxAttempts: 3,
+    });
+    if (!testEndpoint) {
+        s3Client = client;
+    }
+    return client;
 }
 
 export async function downloadRawVideo(key: string, destinationPath: string) {

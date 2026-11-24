@@ -34,7 +34,7 @@ export default defineConfig(({ mode }) => {
   const webEnv = localOnly ? {} : readRuntimeEnv(process.cwd())
   const apiPort = localOnly
     ? process.env.API_PORT || readLocalApiPort() || '3001'
-    : process.env.API_PORT || process.env.PORT || apiEnv.API_PORT || apiEnv.PORT || '3001'
+    : process.env.API_PORT || apiEnv.API_PORT || '3001'
   if (!/^\d+$/.test(apiPort) || Number(apiPort) < 1 || Number(apiPort) > 65535) {
     throw new Error('API_PORT must be an integer between 1 and 65535.')
   }
@@ -44,6 +44,7 @@ export default defineConfig(({ mode }) => {
       || webEnv.API_PROXY_TARGET
       || apiEnv.API_PROXY_TARGET
       || `http://127.0.0.1:${apiPort}`
+  let resolvedProxyTarget = proxyTarget
 
   if (!localOnly && mode === 'development' && process.env.WATCHTUBE_ALLOW_EXTERNAL_SERVICES !== '1') {
     let proxyUrl: URL
@@ -59,6 +60,10 @@ export default defineConfig(({ mode }) => {
     ) {
       throw new Error('Local Vite development requires a loopback API_PROXY_TARGET.');
     }
+    if (hostname === 'localhost' || hostname === '::1') {
+      proxyUrl.hostname = '127.0.0.1'
+      resolvedProxyTarget = proxyUrl.toString().replace(/\/$/, '')
+    }
   }
 
   return {
@@ -67,7 +72,7 @@ export default defineConfig(({ mode }) => {
     server: {
       proxy: {
         '/api': {
-          target: proxyTarget,
+          target: resolvedProxyTarget,
           changeOrigin: true,
         },
       },

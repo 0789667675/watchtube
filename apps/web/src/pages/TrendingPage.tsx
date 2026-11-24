@@ -14,6 +14,90 @@ interface TrendingResponse {
   };
 }
 
+interface TrendingContentProps {
+  page: number;
+  videos: ViewerVideo[];
+  hasMore: boolean;
+  error: string | null;
+  isLoading: boolean;
+  onRetry: () => void;
+  onPageChange: (page: number) => void;
+}
+
+export function TrendingContent({
+  page,
+  videos,
+  hasMore,
+  error,
+  isLoading,
+  onRetry,
+  onPageChange,
+}: TrendingContentProps) {
+  return (
+    <section className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8">
+      <header className="mb-6">
+        <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Trending</h1>
+        <p className="mt-1 text-text-muted">Public videos ranked by valid views, likes, and comments from the past seven days.</p>
+      </header>
+
+      {isLoading ? (
+        <LoadingState label="Loading trending videos…" layout="grid" />
+      ) : error ? (
+        <ErrorState message={error} onRetry={onRetry} />
+      ) : videos.length === 0 ? (
+        <div className="space-y-4">
+          <EmptyState title="Nothing trending yet" message="No public videos have recorded valid views, likes, or comments in the past seven days." />
+          {page > 1 && (
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={() => onPageChange(page - 1)}
+                className="min-h-11 rounded-control border border-border px-4 py-2 text-sm font-semibold"
+              >
+                Previous page
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-8">
+          <div className="grid grid-cols-1 gap-x-5 gap-y-8 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            {videos.map((video, index) => (
+              <div key={video.id} className="relative">
+                <span className="absolute -left-2 -top-2 z-10 rounded-full border border-border bg-surface-raised px-2.5 py-1 text-xs font-bold text-brand-dark">
+                  #{(page - 1) * 12 + index + 1}
+                </span>
+                <VideoCard video={video} />
+              </div>
+            ))}
+          </div>
+          <nav aria-label="Trending pages" className="flex items-center justify-center gap-3">
+            {page > 1 && (
+              <button
+                type="button"
+                onClick={() => onPageChange(page - 1)}
+                className="min-h-11 rounded-control border border-border px-4 py-2 text-sm font-semibold"
+              >
+                Previous
+              </button>
+            )}
+            <span className="text-sm text-text-muted">Page {page}</span>
+            {hasMore && (
+              <button
+                type="button"
+                onClick={() => onPageChange(page + 1)}
+                className="min-h-11 rounded-control border border-border px-4 py-2 text-sm font-semibold"
+              >
+                Next
+              </button>
+            )}
+          </nav>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function TrendingPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const parsedPage = Number(searchParams.get('page') ?? '1');
@@ -68,66 +152,14 @@ export function TrendingPage() {
   };
 
   return (
-    <section className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8">
-      <header className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Trending</h1>
-        <p className="mt-1 text-text-muted">Public videos ranked by recorded views and comment activity.</p>
-      </header>
-
-      {isLoading ? (
-        <LoadingState label="Loading trending videos…" layout="grid" />
-      ) : error ? (
-        <ErrorState message={error} onRetry={() => setRequestNumber((number) => number + 1)} />
-      ) : videos.length === 0 ? (
-        <div className="space-y-4">
-          <EmptyState title="Nothing trending yet" message="Public videos need recorded views, likes, or comments to appear here." />
-          {page > 1 && (
-            <div className="text-center">
-              <button
-                type="button"
-                onClick={() => goToPage(page - 1)}
-                className="min-h-11 rounded-control border border-border px-4 py-2 text-sm font-semibold"
-              >
-                Previous page
-              </button>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="space-y-8">
-          <div className="grid grid-cols-1 gap-x-5 gap-y-8 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-            {videos.map((video, index) => (
-              <div key={video.id} className="relative">
-                <span className="absolute -left-2 -top-2 z-10 rounded-full border border-border bg-surface-raised px-2.5 py-1 text-xs font-bold text-brand-dark">
-                  #{(page - 1) * 12 + index + 1}
-                </span>
-                <VideoCard video={video} />
-              </div>
-            ))}
-          </div>
-          <nav aria-label="Trending pages" className="flex items-center justify-center gap-3">
-            {page > 1 && (
-              <button
-                type="button"
-                onClick={() => goToPage(page - 1)}
-                className="min-h-11 rounded-control border border-border px-4 py-2 text-sm font-semibold"
-              >
-                Previous
-              </button>
-            )}
-            <span className="text-sm text-text-muted">Page {page}</span>
-            {hasMore && (
-              <button
-                type="button"
-                onClick={() => goToPage(page + 1)}
-                className="min-h-11 rounded-control border border-border px-4 py-2 text-sm font-semibold"
-              >
-                Next
-              </button>
-            )}
-          </nav>
-        </div>
-      )}
-    </section>
+    <TrendingContent
+      page={page}
+      videos={videos}
+      hasMore={hasMore}
+      error={error}
+      isLoading={isLoading}
+      onRetry={() => setRequestNumber((number) => number + 1)}
+      onPageChange={goToPage}
+    />
   );
 }

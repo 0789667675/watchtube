@@ -449,3 +449,256 @@ pnpm exec prisma migrate diff --from-url "$env:DATABASE_URL" --to-schema-datamod
 - The first `validate` is static. The first `psql` is read-only preflight; verify the target identity and exact legacy schema, and record its row count. `migrate resolve` records **only** `20261109070000_baseline_legacy_user` as applied (zero SQL steps); it does not execute its DDL. The next read-only query and `migrate status` must show that baseline finished and `20261109082031_init_preserve_legacy_user` still pending, with the original table unchanged. Only `migrate deploy` executes the existing `20261109082031_init_preserve_legacy_user`, which archives `User` and creates the current Prisma schema.
 - Final read-only checks must show both migrations finished, 18 current model tables, and `User_legacy_20261109` retaining the preflight row count, columns, PK, and indexes. The expected Prisma schema diff is only the intentionally out-of-model archive table; no diff SQL is to be executed.
 - If any command fails, target identity is unexpected, migration status differs, or row/schema checks do not match, stop immediately. Do not rerun, reset, drop, truncate, use `db push`, mark the schema-creation migration applied, roll back/repair migration history, or attempt destructive repair. Preserve output and use read-only inspection only.
+
+---
+
+### Task: Workstream 3 — Viewer Discovery, Playback & Engagement Reliability — November 23, 2026
+- Branch `main`, HEAD `1857d1aeaa87e434d67a4c41a0c117acf91c41e5`; workspace `D:\watchtube\watchtube`.
+- Zero destructive Git commands; all existing user and baseline modifications preserved. No commits or pushes performed.
+- Audited and verified viewer discovery feeds:
+  - `HomePage`: Verified eligible discovery content rendering, responsive grid, loading skeletons, honest empty state, error retry, and navigation links.
+  - `ForYouPage`: Verified dedicated recommendation service integration (`/api/v1/feed/for-you`), handling personalized vs. discovery fallback strategies, error retry, and pagination.
+  - `TrendingPage`: Verified 7-day weighted ranking calculation, ranking badge overlays (#1, #2), period framing, and empty/error handling.
+  - `SubscriptionsPage`: Verified authenticated subscription feed (`/api/v1/feed/subscriptions`), clear signed-out state with `SignInLink`, honest empty state, and error handling.
+  - `SearchPage`: Verified keyword search across channels and videos, channel cards with avatar fallbacks and verified badges, honest empty query and no-result states.
+  - `ChannelPage`: Verified channel header, banner and avatar safe URL validation and error fallbacks, live subscriber counter update on subscribe/unsubscribe, and report modal.
+- Hardened Shorts experience (`ShortsPage.tsx`):
+  - Strictly enforced vertical 9:16 aspect ratio presentation (`aspect-[9/16]`) in both grid and viewer modes.
+  - Strictly enforced maximum duration limit of 180 seconds (`MAX_SHORT_DURATION_SECONDS = 180`, videos > 180s filtered out).
+  - Built an immersive vertical Shorts viewer mode with auto-looping playback, play/pause overlay, mute/unmute toggle.
+  - Added accessible navigation controls: Previous/Next buttons, keyboard navigation (`ArrowUp`/`k` for previous, `ArrowDown`/`j` for next, Space for play/pause, `m` for mute).
+  - Integrated right-side vertical action bar: optimistic Like/Dislike toggles, slide-over comments drawer with live posting, link copying, and video reporting modal.
+  - Added a "Browse grid" / "Watch feed" toggle and clean pagination.
+- Hardened playback & advertising fail-open resilience (`VideoPlayer.tsx` & `WatchPage.tsx`):
+  - Connected `videoId` and `viewerSessionId` from `WatchPage` to `VideoPlayer`.
+  - Added pre-roll ad decision query to `/api/v1/monetization/decision` with full telemetry reporting (`IMPRESSION`, `START`, `COMPLETE`, `SKIP`, `ERROR`) to `/api/v1/monetization/event`.
+  - Enforced a strict **Fail-Open Policy**: if an ad decision fails, returns `NO_FILL`, times out after 2000ms, or if ad media fails to load, `VideoPlayer` immediately and silently fails open to regular content playback without blocking or delaying the user.
+  - Maintained HLS stream playback, low-bandwidth mode (360p Data Saver), resolution selector, buffering spinner, keyboard shortcuts, and retry on fatal error.
+- Hardened engagement & comments reliability (`WatchPage.tsx`):
+  - Top-level comments with cursor pagination (`/api/v1/videos/:id/comments`).
+  - Added full support for nested comment replies (`GET /api/v1/comments/:id/replies`, `POST /api/v1/videos/:id/comments` with `parentId: comment.id`).
+  - Added reply count indicators (`_count.replies`), expandable/collapsible reply threads, and inline reply forms with sign-in prompts on 401.
+  - Implemented true optimistic Like/Dislike reaction toggles with state rollback on error.
+  - Added live subscriber count updates in `WatchPage` when subscribing/unsubscribing to the video's channel.
+  - Integrated `ReportModal` for both video and comment reporting targets.
+- Authored test suite `apps/web/tests/viewerPlayback.test.mjs` verifying WatchPage comment replies and optimistic reactions, VideoPlayer advertising fail-open resilience, and ShortsPage 9:16 vertical presentation and <=180s duration enforcement.
+- Verification results:
+  - `pnpm --filter @watchtube/web test`: 40/40 tests passing (0 failures).
+  - `pnpm --filter @watchtube/web build`: Built cleanly with exit code 0 (`tsc -b && vite build`).
+  - `pnpm --filter @watchtube/web lint`: Exited 0 with 0 errors.
+
+---
+
+### Task: Workstream 1 — Video Ingestion, Storage & Processing Reliability — November 23, 2026
+- Branch `main`, HEAD `1857d1aeaa87e434d67a4c41a0c117acf91c41e5`; workspace `D:\watchtube\watchtube`.
+- Zero destructive Git operations; preserved all pre-existing modifications and untracked files without commit or push.
+- Storage & Ingestion Pipeline Hardening:
+  - Fixed `apps/api/src/index.ts` `GET /api/v1/videos/:id` public watch query to use explicit `select:` projection instead of `include:`, preventing `BigInt` JSON serialization crash (`500`) and private key leaks (`rawStorageKey`, `thumbnailStorageKey`, `pendingThumbnailStorageKey`).
+  - Fixed `apps/api/src/services/storage.service.ts` `extractPublishedRenditionName` regex to match Shorts `540p.m3u8` alongside standard `360p|720p|1080p`, resolving orphaned private playlist URLs on Short publish.
+  - Configured `@aws-sdk/client-s3` with `requestChecksumCalculation: 'WHEN_REQUIRED'` and `responseChecksumValidation: 'WHEN_REQUIRED'` in API and Worker storage services to prevent Cloudflare R2 presigned PUT signature mismatches.
+  - Added strict loopback `WATCHTUBE_TEST_S3_ENDPOINT` support (restricted to `127.0.0.1`, disabled when `NODE_ENV === 'production'`).
+  - Added `video.isShort && uploadedObject.contentLength > MAX_SHORT_UPLOAD_SIZE` validation in `POST /api/v1/videos/:id/verify-upload`.
+  - Replaced Prisma `$queryRaw` with `$executeRaw` for `pg_advisory_xact_lock` in `apps/worker/src/worker.ts` to prevent `P2010` `void` deserialization crashes.
+  - Fixed BullMQ off-by-1 attempt check in `isTerminalAttempt` (`job.attemptsMade >= attempts`).
+  - Added missing per-rendition `.m3u8` playlist upload (`uploadPrivateProcessingFile`) in worker loop, eliminating incomplete asset `503` errors on publish.
+  - Hardened FFmpeg transcoding in `transcode.service.ts` (separate argument tokens, `-preset veryfast`, `-pix_fmt yuv420p`, conditional audio mapping vs `-an`, configurable `posterTimestamp` for sub-second clips).
+- Verification results:
+  - `pnpm --filter @watchtube/worker test`: 19/19 tests passed (0 failures).
+  - `pnpm --filter @watchtube/api test`: 31/31 suites, 227/227 tests passed (0 failures).
+  - End-to-end video ingestion verification (`scratch/e2e-video-pipeline.cjs`): 77 S3-wire HTTP requests passed across Flow A (standard AV MP4), Flow B (silent Short 540p), and Flow C (corrupt upload failure and retry recovery).
+  - Cloudflare R2 live status: Read-only `HeadBucket` and `ListObjectsV2` succeed; live `PutObject` and `GetBucketCorsCommand` return `403 AccessDenied` (external permission blocker).
+
+---
+
+### Task: Four-Workstream Repository Reconciliation & Audit — November 23, 2026
+- Branch `main`, HEAD `1857d1aeaa87e434d67a4c41a0c117acf91c41e5`; workspace `D:\watchtube\watchtube`.
+- Completed comprehensive read-only audit reconciling Workstreams 1, 2, 3, and 4.
+- Reconciled web test discrepancy: 40 tests (Workstream 3 baseline) vs. 45 tests (Workstream 2 addition of `creatorStudioUpload.test.mjs`, 5 tests). Combined suite passes 45/45.
+- Verified monorepo package status:
+  - API: TypeScript build clean, typecheck clean (`npx tsc --noEmit`), 31/31 test suites (227/227 tests) passing.
+  - Worker: TypeScript build clean, 19/19 tests passing.
+  - Web: TypeScript build clean (`tsc -b && vite build`), lint clean (`oxlint` 0 errors), 45/45 tests passing.
+  - Mobile: TypeScript clean (`tsc --noEmit`), lint clean (`expo lint`), 19/19 contract tests passing, `expo export` clean for iOS/Android.
+  - Database: Schema up to date with 8 migrations (`prisma migrate status`), guard tests clean (6/6).
+- Updated `WATCHTUBE_MASTER_COMPLETION_CHECKLIST.md` with accurate evidence-based statuses and added new section "Email, Notifications & Creator Wallet Communications".
+
+---
+
+### Task: Workstreams A & B Implementation & Integration Verification — November 23, 2026
+- Branch `main`, HEAD `1857d1aeaa87e434d67a4c41a0c117acf91c41e5`; workspace `D:\watchtube\watchtube`.
+- Zero destructive Git operations; preserved all pre-existing tracked modifications and untracked files without commit or push.
+- Workstream A (Financial Notification Events, Payment Orchestration & Revenue Attribution):
+  - Created `apps/api/src/services/finance/financialEvents.ts` defining typed `FinancialNotificationEvent` lifecycle contracts (`PAYMENT_RECEIVED`, `WITHDRAWAL_REQUESTED`, `WITHDRAWAL_DISPATCHED`, `WITHDRAWAL_FAILED`, `REVENUE_ATTRIBUTED`).
+  - Implemented fail-safe `emitFinancialNotificationEvent` with `Promise.allSettled`, guaranteeing financial transactions and wallet ledger balance mutations never fail or rollback due to notification listener errors.
+  - Wired non-blocking event emissions into `PaymentOrchestratorService` (`initiateCreatorPayout`, `applyVerifiedStatusTransition`) and `RevenueAttributionService` (`reconcileVerifiedReports`).
+  - Authored test suite `apps/api/tests/financial-events.test.ts` (3 tests) verifying listener registration, dispatch, BigInt precision, payload immutability, fail-safe isolation, and full payout lifecycle integration.
+  - Verified 68/68 passing tests across Workstream A financial/monetization test suites.
+- Workstream B (Database Schema, Account/Channel Uniqueness, Email & In-App Notifications):
+  - Schema & Migration:
+    - Updated `packages/database/prisma/schema.prisma` with `@@unique([userId])` on `Channel`, enforcing 1 user = 1 channel at the database constraint level (`Channel_userId_key`).
+    - Added `model Notification` with composite index `[userId, isRead, createdAt]` and cascade delete on user deletion; added `notifications Notification[]` on `User`.
+    - Generated and safely applied migration `20261123140000_enforce_channel_uniqueness_and_notifications` using guarded script `node scripts/prisma-local.cjs migrate deploy`.
+    - Baseline database counts strictly preserved: 11 users, 8 channels, 8 videos, 0 notifications.
+  - Channel Uniqueness:
+    - Enforced in `apps/api/src/routes/channel.route.ts` via `hasUserChannel(userId)` check returning HTTP 409 (`Each account may only have one channel.`), with P2002 error target inspection for concurrent races.
+    - Added unit test suite `apps/api/tests/channel-uniqueness.test.ts` (4 tests). All 11 channel tests pass (4 new + 7 existing).
+  - Centralized Email Dispatcher:
+    - Created `apps/api/src/services/email/` with `IEmailTransport`, `MockEmailTransport`, `ConsoleEmailTransport`, and `SmtpEmailTransport`.
+    - Authored 7 strongly typed responsive HTML + plain text transactional templates (`WTPP_STATUS`, `PAYMENT_RECEIVED`, `WITHDRAWAL_REQUESTED`, `WITHDRAWAL_DISPATCHED`, `WITHDRAWAL_FAILED`, `SECURITY_ALERT`, `VIDEO_PROCESSING_STATUS`).
+    - Added unit test suite `apps/api/tests/email-dispatcher.test.ts` (5 tests passing).
+  - In-App Notification System & Financial Consumer:
+    - Created `apps/api/src/services/notifications/` with `NotificationService`, `PrismaNotificationRepository`, `InMemoryNotificationRepository`, and `FinancialNotificationConsumer` bridging Workstream A financial events to in-app notifications and customer emails.
+    - Created `apps/api/src/routes/notifications.route.ts` (`GET /`, `GET /unread-count`, `PATCH /:id/read`, `POST /read-all`), mounted in `apps/api/src/index.ts` under `/api/v1/notifications`.
+    - Added unit test suite `apps/api/tests/notifications.route.test.ts` (3 tests passing).
+- Comprehensive Monorepo Verification Evidence:
+  - `@watchtube/database`: `db:status` shows 9 migrations up to date; guard tests: 6/6 passing.
+  - `@watchtube/api`: Build (`tsc`) exit 0; all 35 test suites (245/245 tests) passing (increased from 227).
+  - `@watchtube/worker`: Build (`tsc`) exit 0; 19/19 tests passing.
+  - `@watchtube/web`: Build (`tsc -b && vite build`) exit 0 (17.35s); 45/45 tests passing.
+  - `@watchtube/mobile`: `tsc --noEmit` exit 0; 19/19 contract tests passing.
+  - `git diff --check`: 0 errors. All existing user work, untracked files, and databases preserved.
+
+---
+
+### Task: Workstream C — Centralized Email Reliability, Notification Lifecycle, Administrative Integration & Launch Security — November 23, 2026
+- Branch `main`, HEAD `1857d1aeaa87e434d67a4c41a0c117acf91c41e5`; workspace `D:\watchtube\watchtube`.
+- Zero destructive Git operations; preserved all pre-existing tracked modifications and untracked files without commit or push.
+- Durable Email Outbox System:
+  - Added `EmailOutboxStatus` enum and `EmailOutbox` model to `packages/database/prisma/schema.prisma` with unique `idempotencyKey`, `status`, `attempts`, `maxAttempts`, `nextAttemptAt`, `lastAttemptAt`, `lastError`, `transportName`.
+  - Created and applied migration `20261123150000_durable_email_outbox_and_preferences` via guarded `prisma-local.cjs`. Database schema up to date with 10 migrations.
+  - Implemented `IEmailOutboxRepository`, `PrismaEmailOutboxRepository`, `InMemoryEmailOutboxRepository`, and `EmailOutboxService` in `apps/api/src/services/email/`.
+  - Atomic job claiming (`status: 'PROCESSING'`), bounded retries (default 5), exponential backoff with jitter (`calculateBackoffWithJitter`), permanent error detection (`isPermanentEmailError`), and crash recovery for orphaned/stale jobs.
+  - Authored unit test suite `apps/api/tests/email-outbox.test.ts` (6/6 tests passing).
+- Platform Lifecycle Notification Events:
+  - Created `PlatformEventDispatcher` orchestrating in-app notifications and durable email delivery for all 14 platform lifecycle events.
+  - Authored 4 additional email templates: `renderWtppReceivedEmail`, `renderCopyrightClaimEmail`, `renderAdminRoleChangedEmail`, `renderPlatformAnnouncementEmail`.
+  - Wired event producers fail-safely across routes: `trust.route.ts` (WTPP submit), `admin.route.ts` (WTPP review, copyright claims, strikes), `video-upload.route.ts` (publish), and `adminManagement.service.ts` (invitation accepted, admin revoked).
+  - Authored unit test suite `apps/api/tests/platform-events.test.ts` (5/5 tests passing).
+- User Notification Preferences API:
+  - Added `NotificationPreference` model with 1:1 user cascade delete relation in schema and migration.
+  - Added `GET /api/v1/notifications/preferences` and `PATCH /api/v1/notifications/preferences` in `apps/api/src/routes/notifications.route.ts`.
+  - Enforced mandatory security invariant: `emailSecurityAlerts` is strictly immutable to `false` and always preserved as `true`.
+  - Authored unit test suite `apps/api/tests/notification-preferences.route.test.ts` (5/5 tests passing).
+- Administrative Operational Health & Outbox Retry:
+  - Added `GET /api/v1/admin/email/health` (accessible to `ADMIN` and `SUPER_ADMIN` via `platform.view_health`) returning summary counts without leaking recipient addresses or bodies.
+  - Added `POST /api/v1/admin/email/outbox/:id/retry` (strictly restricted to `SUPER_ADMIN`) re-queuing failed outbox jobs to `PENDING` with audit event recording.
+  - Authored unit test suite `apps/api/tests/admin-email-health.route.test.ts` (5/5 tests passing).
+- Full Monorepo Sequential Verification:
+  - `@watchtube/database`: 10 migrations up to date; guard tests: 6/6 passing. Baseline row counts preserved: `users: 11, channels: 8, videos: 8, variants: 0, notifications: 0, emailOutbox: 0, prefs: 0`.
+  - `@watchtube/api`: Build (`tsc`) exit 0; all 39 test suites (266/266 tests) passing.
+  - `@watchtube/worker`: Build (`tsc`) exit 0; 19/19 tests passing.
+  - `@watchtube/web`: Build (`tsc -b && vite build`) exit 0; 45/45 tests passing.
+  - `@watchtube/mobile`: `tsc --noEmit` exit 0; 19/19 contract tests passing.
+  - Total tests passing across monorepo: 355/355 (Database: 6, API: 266, Worker: 19, Web: 45, Mobile: 19).
+  - Zero destructive Git commands executed; all existing user files preserved.
+
+---
+
+### Task: Workstream D — Admin & Super Admin Control Center, Platform Governance, Audit and Operational Management — November 23, 2026
+- **Branch / HEAD:** `main` / `1857d1aeaa87e434d67a4c41a0c117acf91c41e5`; workspace `D:\watchtube\watchtube`.
+- **Zero destructive Git operations:** Preserved all pre-existing tracked modifications and untracked files without commit or push.
+- **Three-Tier Role & Authority Invariants Enforced:**
+  - Preserved strict 3 roles (`SUPER_ADMIN`, `ADMIN`, `USER`). Ordinary admin accounts cannot access company financial intelligence, payout execution, provider configs, or payment secrets.
+  - Partner accounts unprovisioned pending explicit Founder authorization.
+- **Backend Governance & Health APIs:**
+  - Implemented `getPlatformHealthOverview` and `getOperationalOverview` in `apps/api/src/services/ceoDashboard.service.ts`.
+  - Added truthful signals for PostgreSQL database, BullMQ video queue, Cloudflare R2 storage, email outbox, and honest unconfigured mobile money states.
+  - Created `apps/api/src/routes/admin-users.route.ts` mounted under `/api/v1/admin/users`: search, status/role filtering, detail lookup, suspension (with self-suspension and SUPER_ADMIN guards), reinstatement, strikes, and reports.
+  - Updated `createWtppApplicationsRouter` with `GET /:id` returning masked identity data (`hasTaxId`, `hasNationalId`).
+  - Updated `listAuditLogs` in `apps/api/src/services/audit.service.ts` with `outcome`, `action`, `targetResource`, `startDate`, `endDate` multi-filtering and operational scope isolation.
+- **Frontend Admin Control Center (`apps/web`):**
+  - Created `UserManagementViewer.tsx`: Responsive directory with search, filter badges, user inspect modal, and accessible confirmation dialogs for suspension/reinstatement.
+  - Created `PlatformHealthCenter.tsx`: Real-time health and telemetry center with status cards, queue backlogs, and executive outbox retry trigger.
+  - Enhanced `AuditLogsViewer.tsx`: Added outcome and date range filters.
+  - Updated `AdminDashboard.tsx`: Added `USERS` and `HEALTH` tabs and integrated new panels.
+- **Automated Governance Tests:**
+  - Authored `apps/api/tests/admin-governance.test.ts` (12 tests) verifying all invariants, RBAC protections, truthful health reporting, and audit filtering.
+- **Full Monorepo Sequential Verification:**
+  - `@watchtube/database`: 10 migrations up to date; guard tests: 6/6 passing. Baseline row counts preserved: `{"users":11,"channels":8,"videos":8,"variants":0,"notifications":0,"emailOutbox":0,"prefs":0}`.
+  - `@watchtube/api`: Build (`tsc`) exit 0; 40 test suites (278/278 tests) passing (increased from 266).
+  - `@worker`: Build (`tsc`) exit 0; 19/19 tests passing.
+  - `@watchtube/web`: Build (`tsc -b && vite build`) exit 0; 45/45 tests passing.
+  - `@watchtube/mobile`: `tsc --noEmit` exit 0; 19/19 contract tests passing.
+  - Total tests passing across monorepo: 367/367 (Database: 6, API: 278, Worker: 19, Web: 45, Mobile: 19).
+  - `git diff --check`: 0 errors. All existing user files, tracked modifications, and databases preserved.
+
+## Incident Resolution: Local Web-to-API Connectivity Restoration (2026-11-23)
+- Diagnosed root cause of "The WatchTube API could not be reached" on web pages: port 3001 had no listening process, and `node apps/api/scripts/dev-local.cjs` threw `ERR_MODULE_NOT_FOUND` due to `ts-node/register` defaulting to ESM loader semantics when invoked from root.
+- Fixed `apps/api/scripts/dev-local.cjs` and `apps/worker/scripts/dev-local.cjs` with explicit `tsconfig.json` path registration.
+- Added `<Route path="shorts" element={<ShortsPage />} />` to `apps/web/src/App.tsx`.
+- Started API process in background task 2448 on `127.0.0.1:3001`; verified connection to PostgreSQL and Redis.
+- Verified direct API and proxied web requests (`/api/v1/health`, `/api/v1/videos`, `/api/v1/feed/for-you`, `/api/v1/feed/trending`, `/api/v1/feed/shorts`, `/api/v1/auth/me`).
+- Confirmed live browser UI via browser automation subagent (Screenshot: `final_step_9.png`).
+- Maintained database state and zero data loss (`{"users":11,"channels":8,"videos":8,"variants":0,"notifications":0,"emailOutbox":0,"prefs":0}`).
+- All monorepo test suites passing (367/367).
+
+## 2026-11-24 — Workstream D Runtime Verification & Security Governance Audit
+- Verified 3-tier RBAC (`SUPER_ADMIN`, `ADMIN`, `USER`), base admin permissions (15), owner-only restrictions (20), and suspended position/account lockout.
+- Verified User Management invariants: self-suspension guard (400), SUPER_ADMIN protection (403), already-suspended guard (400), reinstatement transition to GOOD_STANDING, and passwordHash omission.
+- Verified WTPP administration: PII masking via boolean flags/AES-GCM encryption, single pending review constraint, and rejection reason enforcement. Added audit logging (`recordAuditEvent`) on review decisions.
+- Verified Audit Logs: recursive metadata redaction of credentials/PII and operational isolation of 16 owner resources for ordinary admins.
+- Verified Platform Health Center: truthful telemetry from live PostgreSQL, 10 applied migrations, BullMQ video queue, R2 storage, and unconfigured payment gateways. Mounted `/api/v1/platform/health` and `/api/v1/operational-overview` in API index and added fallback in web component.
+- Audited email outbox: verified admin health aggregation, SUPER_ADMIN retry authorization, and identified that worker does not yet schedule EmailOutboxProcessor.
+- Verified browser frontend: unauthenticated `/admin` redirects to `/auth/login`; authenticated non-admin sees 403 Forbidden alert; zero console errors.
+- Monorepo regression verification: Database 6/6, API 278/278, Worker 19/19, Web 45/45, Mobile 19/19 (Total: 367/367 passing). Builds pass exit 0. Database row counts unchanged (users: 11, channels: 8, videos: 8). git diff --check: 0 errors.
+
+## 2026-11-24 — Workstream E: Durable Email Outbox Worker Integration & Runtime Verification
+- Completed durable email delivery pipeline by integrating `EmailOutboxProcessor` into `apps/worker/src/worker.ts` alongside the BullMQ `video-transcode` worker.
+- Added self-contained worker email services in `apps/worker/src/services/email/` (`types.ts`, `outbox.types.ts`, `transports.ts`, `outboxRepository.ts`, `emailOutbox.service.ts`, `index.ts`), preserving monorepo build independence.
+- Enhanced `shutdownWorker()` with in-flight drain (`await processor.stop()`) and isolated try/catch blocks preventing cascade failures between email processor, BullMQ worker, and Redis connection.
+- Hardened `PrismaEmailOutboxRepository.claimPendingJobs` with clock-skew tolerance (`readyThreshold = now + 1000ms`) and safe timestamp matching (`lastAttemptAt >= now - 1000ms`).
+- Authored 12 focused integration tests in `apps/worker/tests/worker.emailOutbox.test.ts` covering lifecycle idempotency, in-flight drain on shutdown, batch draining to MockEmailTransport, retry with backoff/jitter, bounded retries (maxAttempts), error pattern classification, expired lease recovery, concurrent lease isolation, tick error resilience, worker shutdown integration, admin manual retry, and helper bounds.
+- Verified end-to-end local runtime against real PostgreSQL database: valid delivery, transient backoff, admin retry, and expired lease recovery all verified. Strictly restored database baseline count to 0.
+- Verified worker startup and shutdown telemetry (`[Worker] Email outbox processor started (interval: 5000ms, batchSize: 20)`).
+- Executed monorepo regression suite: 379/379 tests passing (Database: 6/6, API: 278/278, Worker: 31/31, Web: 45/45, Mobile: 19/19). Builds pass across API, Worker, and Web. Baseline database rows strictly preserved: `{"users":11,"channels":8,"videos":8,"variants":0,"notifications":0,"emailOutbox":0,"prefs":0}`. Zero git diff errors.
+
+## 2026-11-24 — Workstream E.1: Final Integration Review & Verification
+- Conducted exhaustive integration review of Workstream E implementation across `apps/worker` and `apps/api`.
+- Verified repository safety: git status clean on branch `main` at commit `1857d1a`, no destructive Git operations, no commits or pushes, all untracked files and working tree modifications preserved.
+- Compared `apps/api/src/services/email/` and `apps/worker/src/services/email/`: confirmed exact database semantics, shared contracts, and documented justification for code duplication based on `apps/worker/tsconfig.json` `rootDir: "src"` boundaries and the existing `storage.service.ts` architectural pattern.
+- Hardened clock-skew logic: replaced premature forward tolerance with strict `nextAttemptAt <= now`, added `nextAttemptAt?: Date` to `EnqueueEmailInput` and `enqueue()`, and replaced strict timestamp equality with range matching for PostgreSQL microsecond precision compatibility.
+- Implemented and verified automated end-to-end worker lifecycle test in `apps/worker/tests/worker.emailOutbox.test.ts`: tests automatic interval draining via `startWorker()` without manual `tick()`, status transition to `SENT`, duplicate delivery prevention, clean shutdown via `shutdownWorker()`, and baseline database preservation.
+- Added video/email isolation tests verifying unexpected email tick errors never crash the worker or stop subsequent processing, and that shutdown gracefully stops the email processor before closing Redis and BullMQ.
+- Re-built worker (`tsc`) and executed full test suite: all 35 tests in `apps/worker` pass cleanly (19 media transcode + 16 email outbox).
+- Verified full monorepo test suite: 383/383 passing tests (Database: 6/6, API: 278/278, Worker: 35/35, Web: 45/45, Mobile: 19/19). Clean builds across Database, API, Worker, and Web.
+- Verified database baseline row counts strictly unchanged: `{"users":11,"channels":8,"videos":8,"variants":0,"notifications":0,"emailOutbox":0,"prefs":0}`. Zero data loss. `git diff --check`: 0 errors.
+
+## 2026-11-24 — Workstream E.2: Atomic Email Claim Ownership Verification
+- Audited atomic claim SQL and candidate retrieval logic in `apps/api/src/services/email/outboxRepository.ts` and `apps/worker/src/services/email/outboxRepository.ts`.
+- Identified concurrency ownership defect: candidate retrieval via `findMany({ where: { id: { in: candidateIds }, status: 'PROCESSING', lastAttemptAt: { gte: staleProcessingBefore } } })` relied on a 60-second timestamp window. When two concurrent workers selected overlapping candidate batches, both workers retrieved and processed all overlapping records, leading to duplicate email sends.
+- Fixed defect using the **Unique Claim Token** pattern:
+  - Generated per-batch unique UUID `const claimToken = crypto.randomUUID()`.
+  - Atomically stamped `transportName: 'claim:' + claimToken` in `updateMany` for both `PrismaEmailOutboxRepository` and `InMemoryEmailOutboxRepository`.
+  - Filtered `findMany` by `transportName: 'claim:' + claimToken`, guaranteeing each worker retrieves strictly the records it claimed.
+  - Masked in-flight claim tokens in `mapRecord`, and reset `transportName: null` on failures and admin retries.
+  - Preserved expired-lease recovery: crashed leases (`lastAttemptAt < staleProcessingBefore`) are claimed and stamped with a new token without restriction.
+- Added comprehensive integration test `Concurrent database worker lease isolation: two independent processors claiming overlapping records never double-claim or double-deliver` in `apps/worker/tests/worker.emailOutbox.test.ts`. Verified with 6 records across two concurrent instances (3 claimed by A, 3 claimed by B, 0 duplicates, all 6 SENT, baseline counts intact).
+- Verified full worker test suite: 36/36 tests passing (19 reliability + 17 email outbox). Verified focused API email tests: 16/16 passing. Clean worker build (`tsc`). Database baseline row count preserved (`users: 11, channels: 8, videos: 8, variants: 0, notifications: 0, emailOutbox: 0, prefs: 0`). `git diff --check`: 0 errors.
+
+## 2026-11-24 — Video & Thumbnail Upload Corrective Implementation & Presigned Header Audit
+- **Safety & Repository State:** Branch `main`, HEAD `1857d1aeaa87e434d67a4c41a0c117acf91c41e5`; workspace `D:\watchtube\watchtube`. All pre-existing tracked and untracked changes strictly preserved. Zero git commits or pushes. Zero production database or Cloudflare R2 modifications.
+- **Root Cause & Presigned Header Investigation:**
+  - Audited `generatePresignedUploadUrl`, `createVideoThumbnailUploadTarget`, and `channelImageStorage.createSignedUploadUrl` in `apps/api/src/services/storage.service.ts`.
+  - Identified that passing `ContentLength: fileSize` to AWS SDK v3's `PutObjectCommand` forced `content-length` into `X-Amz-SignedHeaders` (`content-length;host`). Because browsers control `Content-Length` and HTTP/2 framing differs, this created signature mismatches (`SignatureDoesNotMatch`) or header-casing conflicts.
+  - Removed `ContentLength` from `PutObjectCommand` in all presigning functions, ensuring `X-Amz-SignedHeaders` outputs strictly `host`. Preserved all server-side file size validations (`MAX_UPLOAD_SIZE`, `VIDEO_THUMBNAIL_MAX_FILE_SIZE`) and post-upload byte verification (`HeadObject` / `GetObject`).
+  - Added regression assertions to `apps/api/tests/storage-readiness.test.ts` verifying signed headers output `host` for both video and thumbnail upload targets.
+- **Frontend Upload Lifecycle Decoupling & Error Handling Corrections:**
+  - Decoupled thumbnail upload from `saveMetadata()` in `apps/web/src/components/studio/UploadModal.tsx`: `saveMetadata()` is now purely responsible for saving draft metadata and returning the draft ID `id`.
+  - Removed synchronous thumbnail PUT from video intent acquisition. Video intent creation and video transfer now proceed unhindered regardless of thumbnail state.
+  - Implemented decoupled, non-blocking thumbnail upload execution (`performThumbnailUpload`) inside `beginUpload()` and isolated thumbnail handling in `saveDraft()`.
+  - Added dedicated `thumbnailError` state and alert rendering under the custom thumbnail input, providing truthful and actionable messaging when thumbnail uploads fail without silently reporting success.
+  - Preserved draft ID (`activeVideoId`) across failed video or thumbnail uploads, ensuring subsequent retries reuse the existing draft rather than creating duplicate draft records.
+  - Enhanced `getApiErrorMessage` in `apps/web/src/api/apiClient.ts` to preserve descriptive error messages from plain JavaScript `Error` instances, with sanitization stripping internal storage endpoints and SigV4 credentials.
+- **Permanent Loopback S3 Pipeline Integration Tests:**
+  - Created `apps/api/tests/loopback-s3-upload-pipeline.test.ts` with an in-process loopback S3-wire mock server (`127.0.0.1`) verifying:
+    1. Video-only upload: presigned URL generation with `X-Amz-SignedHeaders=host`, direct HTTP PUT transfer, and `inspectRawObject` metadata inspection.
+    2. Video-plus-thumbnail upload: thumbnail presigned target generation, direct HTTP PUT transfer, `normalizeUploadedVideoThumbnail` decoding/processing via Sharp, WebP persistence, and inspection.
+    3. Missing object detection: `inspectRawObject` cleanly returns `null`.
+  - Integrated `loopback-s3-upload-pipeline.test.ts` into `apps/api/package.json` test script.
+- **Monorepo Test & Verification Results:**
+  - `@watchtube/api`: **281/281 tests passing** across 11 suites (including 3 loopback S3 upload pipeline tests). Typecheck clean (`tsc --noEmit`).
+  - `@watchtube/web`: **46/46 tests passing** (including decoupled upload lifecycle, draft retention, `ERR_NETWORK` transfer mapping, and plain `Error` preservation tests). Typecheck clean (`tsc -b`), build clean (`vite build`).
+  - `@watchtube/worker`: **36/36 tests passing** (19 media transcode + 17 email outbox). Typecheck clean (`tsc --noEmit`).
+  - **Total Monorepo Tests Passing: 387/387 tests (0 failures).**
+  - Database row counts strictly preserved: `{"users":11,"channels":8,"videos":8,"variants":0,"notifications":0,"emailOutbox":0,"prefs":0}`. Zero data loss.
+  - Live Cloudflare R2 upload readiness remains truthfully `BLOCKED` until an authorized browser PUT succeeds against the real bucket with Cloudflare R2 bucket write/CORS permissions.

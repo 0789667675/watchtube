@@ -6,13 +6,18 @@ import { useForm } from 'react-hook-form';
 import { apiClient, getApiErrorMessage } from '../../api/apiClient';
 import {
   MAX_VIDEO_UPLOAD_SIZE,
+  MAX_SHORT_UPLOAD_SIZE,
+  getUploadTransferErrorMessage,
   normalizeUploadTitle,
   retryUploadVerification,
   retryVideoUpload,
   startVideoUpload,
   UploadWorkflowError,
   validateUploadFile,
+  validateShortUploadFile,
   validateUploadTitle,
+  validateThumbnailFile,
+  validateThumbnailDimensions,
   type UploadWorkflowDependencies,
 } from '../../api/videoUploadWorkflow';
 
@@ -27,11 +32,13 @@ interface UploadModalProps {
   isOpen: boolean;
   channelId: string;
   initialVideoId?: string | null;
+  initialIsShort?: boolean;
   onClose: () => void;
   onUploaded: () => void;
 }
 
 interface UploadForm {
+  isShort: boolean;
   title: string;
   description: string;
   tags: string;
@@ -69,6 +76,7 @@ type UploadPhase =
 
 interface VideoDetails {
   videoId: string;
+  isShort: boolean;
   title: string;
   description: string | null;
   tags: string[];
@@ -83,6 +91,7 @@ interface VideoDetails {
 }
 
 const defaultValues: UploadForm = {
+  isShort: false,
   title: '',
   description: '',
   tags: '',
@@ -95,6 +104,7 @@ const defaultValues: UploadForm = {
 
 function getMetadata(values: UploadForm) {
   return {
+    isShort: values.isShort,
     title: normalizeUploadTitle(values.title),
     description: values.description.trim() || null,
     tags: [...new Set(values.tags.split(/[,\n]/).map((tag) => tag.trim()).filter(Boolean))],
@@ -106,10 +116,53 @@ function getMetadata(values: UploadForm) {
   };
 }
 
+function readVideoMetadata(file: File): Promise<{ duration: number; width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    const url = URL.createObjectURL(file);
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => {
+      const result = {
+        duration: video.duration,
+        width: video.videoWidth,
+        height: video.videoHeight,
+      };
+      URL.revokeObjectURL(url);
+      if (!Number.isFinite(result.duration) || result.width <= 0 || result.height <= 0) {
+        reject(new Error('Video duration or dimensions could not be determined.'));
+        return;
+      }
+      resolve(result);
+    };
+    video.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('The selected video could not be read.'));
+    };
+    video.src = url;
+  });
+}
+
+function readImageDimensions(file: File): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('The selected thumbnail image could not be read.'));
+    };
+    img.src = url;
+  });
+}
+
 export const UploadModal: React.FC<UploadModalProps> = ({
   isOpen,
   channelId,
   initialVideoId = null,
+  initialIsShort = false,
   onClose,
   onUploaded,
 }) => {
@@ -121,11 +174,15 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   const [copyrightReviewStatus, setCopyrightReviewStatus] = useState<'NOT_SCANNED' | 'BLOCKED'>('NOT_SCANNED');
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState('');
+  const [thumbnailError, setThumbnailError] = useState('');
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [thumbnailPreviewUrl, setThumbnailPreviewUrl] = useState<string | null>(null);
   const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
   const [uploadAttempts, setUploadAttempts] = useState(0);
+  const [isLoadingDraft, setIsLoadingDraft] = useState(false);
   const uploadController = useRef<AbortController | null>(null);
+  const thumbnailInputRef = useRef<HTMLInputElement | null>(null);
+
   const {
     register,
     handleSubmit,
@@ -134,10 +191,13 @@ export const UploadModal: React.FC<UploadModalProps> = ({
     watch,
     formState: { errors },
   } = useForm<UploadForm>({ defaultValues });
+
   const titleValue = watch('title') ?? '';
+  const descValue = watch('description') ?? '';
   const tagValue = watch('tags') ?? '';
+  const isShortValue = watch('isShort');
   const copyrightDeclaredValue = watch('copyrightDeclared');
-  const isBusy = ['saving', 'requesting', 'uploading', 'verifying'].includes(phase);
+  const isBusy = ['saving', 'requesting', 'uploading', 'verifying'].includes(phase) || isLoadingDraft;
 
   useEffect(() => {
     if (!thumbnailFile) {
@@ -162,29 +222,46 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     let active = true;
+    const controller = new AbortController();
+
     if (!initialVideoId) {
       setVideoId(null);
       setVideoStatus('DRAFT');
       setThumbnailUrl(null);
       setThumbnailFile(null);
+      setThumbnailError('');
+      setFile(null);
       setCopyrightReviewStatus('NOT_SCANNED');
       setPhase('ready');
       setError('');
-      reset(defaultValues);
-      return;
+      setIsLoadingDraft(false);
+      reset({ ...defaultValues, isShort: initialIsShort });
+      return () => {
+        active = false;
+        controller.abort();
+      };
     }
 
-    apiClient.get<VideoDetails>(`/api/v1/videos/${initialVideoId}`)
+    setIsLoadingDraft(true);
+    setError('');
+    setThumbnailError('');
+    apiClient.get<VideoDetails>(`/api/v1/videos/${initialVideoId}`, { signal: controller.signal })
       .then(({ data }) => {
         if (!active) return;
         setVideoId(data.videoId);
         setVideoStatus(data.status);
         setThumbnailUrl(data.thumbnailUrl);
         setCopyrightReviewStatus(data.copyrightReviewStatus);
-        setPhase(data.status === 'PROCESSING' ? 'processing'
-          : data.status === 'READY_FOR_REVIEW' ? 'ready-to-publish'
-            : data.status === 'PUBLISHED' ? 'published' : 'ready');
+        const nextPhase: UploadPhase = data.status === 'PROCESSING'
+          ? 'processing'
+          : (data.status === 'READY_FOR_REVIEW' || data.status === 'READY')
+            ? 'ready-to-publish'
+            : data.status === 'PUBLISHED'
+              ? 'published'
+              : 'ready';
+        setPhase(nextPhase);
         reset({
+          isShort: data.isShort,
           title: data.title,
           description: data.description ?? '',
           tags: data.tags.join(', '),
@@ -196,29 +273,81 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         });
       })
       .catch((requestError: unknown) => {
-        if (active) setError(getApiErrorMessage(requestError, 'Video details could not be loaded.'));
+        if (!active || axios.isCancel(requestError) || controller.signal.aborted) return;
+        setError(getApiErrorMessage(requestError, 'Video details could not be loaded.'));
+      })
+      .finally(() => {
+        if (active) setIsLoadingDraft(false);
       });
-    return () => { active = false; };
-  }, [initialVideoId, isOpen, reset]);
 
-  const uploadThumbnail = useCallback(async (id: string, selectedFile: File) => {
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(selectedFile.type)) {
-      throw new Error('Choose a JPEG, PNG, or WebP thumbnail.');
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [initialVideoId, initialIsShort, isOpen, reset]);
+
+  const onThumbnailSelected = async (selectedFile: File | null) => {
+    if (!selectedFile) {
+      setThumbnailFile(null);
+      return;
     }
-    if (selectedFile.size <= 0 || selectedFile.size > 5 * 1024 * 1024) {
-      throw new Error('Choose a thumbnail no larger than 5 MB.');
+    const fileError = validateThumbnailFile(selectedFile);
+    if (fileError) {
+      setError(fileError);
+      if (thumbnailInputRef.current) thumbnailInputRef.current.value = '';
+      return;
     }
+    try {
+      const dimensions = await readImageDimensions(selectedFile);
+      const dimensionError = validateThumbnailDimensions(dimensions.width, dimensions.height, getValues('isShort'));
+      if (dimensionError) {
+        setError(dimensionError);
+        if (thumbnailInputRef.current) thumbnailInputRef.current.value = '';
+        return;
+      }
+    } catch (readError) {
+      setError(readError instanceof Error ? readError.message : 'The thumbnail image could not be read.');
+      if (thumbnailInputRef.current) thumbnailInputRef.current.value = '';
+      return;
+    }
+    setError('');
+    setThumbnailError('');
+    setThumbnailFile(selectedFile);
+  };
+
+  const uploadThumbnail = useCallback(async (id: string, selectedFile: File, isShort = false) => {
+    const fileError = validateThumbnailFile(selectedFile);
+    if (fileError) throw new Error(fileError);
+
+    try {
+      const dimensions = await readImageDimensions(selectedFile);
+      const dimensionError = validateThumbnailDimensions(dimensions.width, dimensions.height, isShort);
+      if (dimensionError) throw new Error(dimensionError);
+    } catch (dimErr) {
+      if (dimErr instanceof Error) throw dimErr;
+      throw new Error('The selected thumbnail could not be validated.');
+    }
+
     const metadata = { contentType: selectedFile.type, fileSize: selectedFile.size };
     const target = await apiClient.post<{ uploadUrl: string }>(
       `/api/v1/videos/${id}/thumbnail-upload-intent`,
       metadata,
     );
-    await axios.put(target.data.uploadUrl, selectedFile, {
-      withCredentials: false,
-      headers: { 'Content-Type': selectedFile.type },
-    });
+
+    try {
+      await axios.put(target.data.uploadUrl, selectedFile, {
+        withCredentials: false,
+        headers: { 'Content-Type': selectedFile.type },
+      });
+    } catch (putError) {
+      const transferError = getUploadTransferErrorMessage(putError);
+      throw new Error(transferError || 'The thumbnail file upload failed. Check network connectivity and retry.');
+    }
+
     await apiClient.post(`/api/v1/videos/${id}/thumbnail-confirmation`, metadata);
     setThumbnailFile(null);
+    setThumbnailError('');
+    if (thumbnailInputRef.current) thumbnailInputRef.current.value = '';
   }, []);
 
   const saveMetadata = useCallback(async (values: UploadForm): Promise<string> => {
@@ -245,10 +374,9 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       setVideoId(id);
       setVideoStatus(data.status);
     }
-    if (thumbnailFile && id) await uploadThumbnail(id, thumbnailFile);
     onUploaded();
     return id;
-  }, [channelId, onUploaded, thumbnailFile, uploadThumbnail, videoId]);
+  }, [channelId, onUploaded, videoId]);
 
   const workflowDependencies: UploadWorkflowDependencies = useMemo(() => ({
     requestIntent: async (metadata) => {
@@ -264,6 +392,9 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         videoId: id,
         contentType: metadata.contentType,
         fileSize: metadata.fileSize,
+        duration: metadata.duration,
+        width: metadata.width,
+        height: metadata.height,
       })).data;
     },
     refreshUploadUrl: async (id, metadata) => (
@@ -304,12 +435,49 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       setError(fileError);
       return;
     }
+    const titleError = validateUploadTitle(getValues('title'));
+    if (titleError) {
+      setError(titleError);
+      return;
+    }
+    let shortMetadata: { duration: number; width: number; height: number } | null = null;
+    if (getValues('isShort')) {
+      try {
+        shortMetadata = await readVideoMetadata(file);
+        const shortError = validateShortUploadFile(file, shortMetadata.duration, shortMetadata.width, shortMetadata.height);
+        if (shortError) {
+          setError(shortError);
+          return;
+        }
+      } catch (metadataError) {
+        setError(metadataError instanceof Error ? metadataError.message : 'Short video metadata could not be read.');
+        return;
+      }
+    }
     setError('');
+    setThumbnailError('');
     setPhase('requesting');
     setUploadAttempts((attempt) => attempt + 1);
+
+    const pendingThumbnail = thumbnailFile;
+    const isShort = getValues('isShort');
+    let activeVideoId = videoId;
+
+    const performThumbnailUpload = async (id: string) => {
+      if (!pendingThumbnail) return;
+      try {
+        await uploadThumbnail(id, pendingThumbnail, isShort);
+      } catch (thumbError) {
+        const thumbMsg = thumbError instanceof Error ? thumbError.message : 'Thumbnail upload failed.';
+        setThumbnailError(thumbMsg);
+      }
+    };
+
     try {
-      if (videoId && videoStatus === 'UPLOADING') {
+      if (activeVideoId && videoStatus === 'UPLOADING') {
         const id = await saveMetadata(getValues());
+        activeVideoId = id;
+        void performThumbnailUpload(id);
         await retryVideoUpload(
           workflowDependencies,
           id,
@@ -320,11 +488,22 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       } else {
         await startVideoUpload(
           workflowDependencies,
-          { title: getMetadata(getValues()).title, contentType: file.type, fileSize: file.size, channelId },
+          {
+            title: getMetadata(getValues()).title,
+            contentType: file.type,
+            fileSize: file.size,
+            channelId,
+            isShort: getValues('isShort'),
+            duration: shortMetadata?.duration,
+            width: shortMetadata?.width,
+            height: shortMetadata?.height,
+          },
           file,
           (id) => {
+            activeVideoId = id;
             setVideoId(id);
             setVideoStatus('UPLOADING');
+            void performThumbnailUpload(id);
           },
           setProgress,
         );
@@ -336,6 +515,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       if (uploadError instanceof UploadWorkflowError && uploadError.videoId) {
         setVideoId(uploadError.videoId);
         setVideoStatus((current) => current === 'DRAFT' ? 'UPLOADING' : current);
+      } else if (activeVideoId) {
+        setVideoId(activeVideoId);
       }
       const stage = uploadError instanceof UploadWorkflowError ? uploadError.stage : 'intent';
       const cause = uploadError instanceof UploadWorkflowError ? uploadError.originalError : uploadError;
@@ -346,7 +527,13 @@ export const UploadModal: React.FC<UploadModalProps> = ({
           : stage === 'verification'
             ? 'The upload could not be verified. Retry verification.'
             : 'Could not start the upload. Please try again.';
-      setError(getApiErrorMessage(cause, fallback));
+      const transferError = uploadError instanceof UploadWorkflowError && uploadError.isFileTransfer
+        ? getUploadTransferErrorMessage(cause)
+        : null;
+      const message = cause instanceof Error && cause.message && !axios.isAxiosError(cause)
+        ? cause.message
+        : getApiErrorMessage(cause, fallback);
+      setError(transferError ?? message);
       setPhase(stage === 'upload' ? 'upload-error' : stage === 'verification' ? 'verify-error' : 'request-error');
     }
   };
@@ -374,9 +561,11 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       copyrightReviewStatus: 'NOT_SCANNED' | 'BLOCKED';
     }>(`/api/v1/videos/${id}/upload-status`);
     setVideoStatus(data.status);
-    setThumbnailUrl(data.thumbnailUrl);
+    if (data.thumbnailUrl) {
+      setThumbnailUrl(data.thumbnailUrl);
+    }
     setCopyrightReviewStatus(data.copyrightReviewStatus);
-    if (data.status === 'READY_FOR_REVIEW') {
+    if (data.status === 'READY_FOR_REVIEW' || data.status === 'READY') {
       setPhase('ready-to-publish');
       onUploaded();
     } else if (data.status === 'PUBLISHED') {
@@ -399,7 +588,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
     const poll = async () => {
       try {
         const status = await refreshStatus(videoId);
-        if (['READY_FOR_REVIEW', 'PUBLISHED', 'FAILED', 'REJECTED', 'BLOCKED'].includes(status)) {
+        if (['READY_FOR_REVIEW', 'READY', 'PUBLISHED', 'FAILED', 'REJECTED', 'BLOCKED'].includes(status)) {
           active = false;
           return;
         }
@@ -434,18 +623,31 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       'video/webm': ['.webm'],
       'video/quicktime': ['.mov'],
     },
-    maxSize: MAX_VIDEO_UPLOAD_SIZE,
+    maxSize: isShortValue ? MAX_SHORT_UPLOAD_SIZE : MAX_VIDEO_UPLOAD_SIZE,
     multiple: false,
     disabled: isBusy,
   });
 
   const saveDraft = async (values: UploadForm) => {
     setError('');
+    setThumbnailError('');
     setPhase('saving');
     try {
-      await saveMetadata(values);
-      setPhase(videoStatus === 'READY_FOR_REVIEW' ? 'ready-to-publish'
-        : videoStatus === 'PUBLISHED' ? 'published' : 'ready');
+      const id = await saveMetadata(values);
+      if (thumbnailFile && id) {
+        try {
+          await uploadThumbnail(id, thumbnailFile, values.isShort);
+        } catch (thumbErr) {
+          const msg = thumbErr instanceof Error ? thumbErr.message : 'Thumbnail upload failed.';
+          setThumbnailError(msg);
+          setError(`Draft saved, but thumbnail upload failed: ${msg}`);
+        }
+      }
+      setPhase(() => {
+        if (videoStatus === 'READY_FOR_REVIEW' || videoStatus === 'READY') return 'ready-to-publish';
+        if (videoStatus === 'PUBLISHED') return 'published';
+        return 'ready';
+      });
     } catch (saveError) {
       setError(getApiErrorMessage(saveError, 'Video metadata could not be saved.'));
       setPhase('request-error');
@@ -454,6 +656,11 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
   const publishVideo = async () => {
     if (!videoId) return;
+    if (!getValues('copyrightDeclared')) {
+      setError('Declare that you own or have permission to upload this content before publishing.');
+      setPhase('ready-to-publish');
+      return;
+    }
     setError('');
     setPhase('saving');
     try {
@@ -473,6 +680,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
   if (!isOpen) return null;
 
+  const canPublish = videoId && (phase === 'ready-to-publish' || videoStatus === 'READY_FOR_REVIEW' || videoStatus === 'READY');
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 backdrop-blur-sm sm:p-4">
       <div
@@ -484,7 +693,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         <div className="flex items-center justify-between border-b border-border-light p-4 dark:border-border-dark">
           <div>
             <h2 id="upload-dialog-title" className="text-xl font-bold font-display">
-              {initialVideoId ? 'Edit video' : 'Upload video'}
+              {initialVideoId ? (isShortValue ? 'Edit Short' : 'Edit video') : (isShortValue ? 'Upload Short' : 'Upload video')}
             </h2>
             {videoId && <p className="mt-1 text-xs text-text-muted">Status: {videoStatus.replaceAll('_', ' ')}</p>}
           </div>
@@ -493,192 +702,272 @@ export const UploadModal: React.FC<UploadModalProps> = ({
           </button>
         </div>
 
-        <form id="upload-form" onSubmit={handleSubmit(saveDraft)} className="flex min-h-0 flex-1 flex-col">
-          <div className="flex-1 space-y-5 overflow-y-auto p-4 sm:p-6">
-            <div {...getRootProps()} className={`cursor-pointer rounded-card border-2 border-dashed p-6 text-center transition sm:p-9 ${isDragActive ? 'border-brand-primary bg-brand-primary/10' : 'border-border hover:border-brand-primary'}`}>
-              <input {...getInputProps()} />
-              <UploadCloud className="mx-auto mb-3 h-12 w-12 text-text-muted" />
-              <p className="font-medium">{file ? 'Choose a different video' : 'Select or drop a video file'}</p>
-              <p className="mt-1 text-sm text-text-muted">MP4, WebM, or QuickTime, up to 2 GB.</p>
-            </div>
-            {fileRejections.length > 0 && (
-              <div role="alert" className="rounded-control bg-surface-subtle p-3 text-sm text-status-warning">
-                {fileRejections.map(({ file: rejectedFile, errors: rejectionErrors }) => (
-                  <p key={`${rejectedFile.name}-${rejectedFile.size}`}>
-                    {rejectedFile.name}: {rejectionErrors.map((item) => item.message).join(' ')}
-                  </p>
-                ))}
-              </div>
-            )}
-
-            {file && (
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <p className="mb-1 text-sm font-medium">Video preview</p>
-                  <video src={videoPreviewUrl ?? undefined} controls muted preload="metadata" className="aspect-video w-full rounded-card bg-black" />
-                  <p className="mt-1 truncate text-xs text-text-muted">{file.name}</p>
-                </div>
-                <div>
-                  <p className="mb-1 text-sm font-medium">Thumbnail preview</p>
-                  {thumbnailPreviewUrl || thumbnailUrl
-                    ? <img src={thumbnailPreviewUrl || thumbnailUrl || undefined} alt="Selected video thumbnail" className="aspect-video w-full rounded-card bg-surface-subtle object-cover" />
-                    : <div className="flex aspect-video items-center justify-center rounded-card bg-surface-subtle p-4 text-center text-xs text-text-muted">A thumbnail will be generated after processing, or choose a custom image.</div>}
-                </div>
-              </div>
-            )}
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className="block text-sm font-medium sm:col-span-2">
-                Title
-                <input
-                  {...register('title', {
-                    required: 'Enter a video title.',
-                    maxLength: { value: 255, message: 'Video titles must be 255 characters or fewer.' },
-                    validate: (value) => validateUploadTitle(value) ?? true,
-                  })}
-                  maxLength={255}
-                  aria-invalid={Boolean(errors.title)}
-                  className="mt-1 w-full rounded-lg border border-border-light bg-canvas-light px-4 py-2 dark:border-border-dark dark:bg-canvas-obsidian"
-                />
-                <span className="mt-1 block text-right text-xs text-text-muted">{titleValue.length}/255</span>
-                {errors.title?.message && <span role="alert" className="text-sm text-status-warning">{errors.title.message}</span>}
-              </label>
-
-              <label className="block text-sm font-medium sm:col-span-2">
-                Description
-                <textarea
-                  {...register('description', { maxLength: 5000 })}
-                  rows={4}
-                  maxLength={5000}
-                  className="mt-1 w-full rounded-lg border border-border-light bg-canvas-light px-4 py-2 dark:border-border-dark dark:bg-canvas-obsidian"
-                />
-              </label>
-
-              <label className="block text-sm font-medium">
-                Tags and keywords
-                <input
-                  {...register('tags')}
-                  aria-describedby="upload-tags-help"
-                  placeholder="Add comma-separated tags"
-                  className="mt-1 w-full rounded-lg border border-border-light bg-canvas-light px-4 py-2 dark:border-border-dark dark:bg-canvas-obsidian"
-                />
-                <span id="upload-tags-help" className="mt-1 block text-xs text-text-muted">
-                  Up to 20 tags · {getMetadata({ ...getValues(), tags: tagValue }).tags.length}/20
-                </span>
-              </label>
-
-              <label className="block text-sm font-medium">
-                Category
-                <select {...register('category')} className="mt-1 w-full rounded-lg border border-border-light bg-canvas-light px-3 py-2 dark:border-border-dark dark:bg-canvas-obsidian">
-                  {categories.map((category) => <option key={category} value={category}>{category.replaceAll('_', ' ')}</option>)}
-                </select>
-              </label>
-
-              <label className="block text-sm font-medium">
-                Language
-                <input
-                  {...register('language', { required: 'Enter the video language.', minLength: 2, maxLength: 35 })}
-                  maxLength={35}
-                  placeholder="e.g. en"
-                  className="mt-1 w-full rounded-lg border border-border-light bg-canvas-light px-4 py-2 dark:border-border-dark dark:bg-canvas-obsidian"
-                />
-              </label>
-
-              <label className="block text-sm font-medium">
-                Visibility
-                <select {...register('visibility')} className="mt-1 w-full rounded-lg border border-border-light bg-canvas-light px-3 py-2 dark:border-border-dark dark:bg-canvas-obsidian">
-                  <option value="PUBLIC">Public</option>
-                  <option value="UNLISTED">Unlisted</option>
-                  <option value="PRIVATE">Private</option>
-                </select>
-              </label>
-
-              <label className="flex items-start gap-2 text-sm sm:col-span-2">
-                <input {...register('madeForKids')} type="checkbox" className="mt-1 accent-brand-action" />
-                <span>This video is made for children.</span>
-              </label>
-
-              <label className="block text-sm font-medium sm:col-span-2">
-                Custom thumbnail
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  onChange={(event) => setThumbnailFile(event.target.files?.[0] ?? null)}
-                  className="mt-1 block w-full text-sm file:mr-3 file:rounded-control file:border-0 file:bg-surface-subtle file:px-3 file:py-2"
-                />
-                <span className="mt-1 block text-xs text-text-muted">JPEG, PNG, or WebP · 5 MB maximum · at least 320 × 180 pixels.</span>
-              </label>
-
-              <div className="rounded-control border border-border bg-surface-subtle p-3 text-sm sm:col-span-2">
-                <h3 className="font-semibold">Copyright and publication</h3>
-                <p className="mt-1 text-xs text-text-muted">
-                  Only upload content you own or have permission to use. Do not upload copyrighted work without authorization.
-                  WatchTube does not currently run automated copyright matching. Creator declarations are not detection results;
-                  submitted claims are reviewed by an administrator.
+        {isLoadingDraft ? (
+          <div className="flex flex-1 items-center justify-center p-12">
+            <p role="status" className="text-sm text-text-muted">Loading draft details…</p>
+          </div>
+        ) : (
+          <form id="upload-form" onSubmit={handleSubmit(saveDraft)} className="flex min-h-0 flex-1 flex-col">
+            <div className="flex-1 space-y-5 overflow-y-auto p-4 sm:p-6">
+              <div {...getRootProps()} className={`cursor-pointer rounded-card border-2 border-dashed p-6 text-center transition sm:p-9 ${isDragActive ? 'border-brand-primary bg-brand-primary/10' : 'border-border hover:border-brand-primary'}`}>
+                <input {...getInputProps()} />
+                <UploadCloud className="mx-auto mb-3 h-12 w-12 text-text-muted" />
+                <p className="font-medium">{file ? 'Choose a different video file' : 'Select or drop a video file'}</p>
+                <p className="mt-1 text-sm text-text-muted">
+                  {isShortValue
+                    ? 'Portrait MP4, WebM, or QuickTime · 9:16 preferred · 3 minutes maximum · 1 GB maximum.'
+                    : 'MP4, WebM, or QuickTime, up to 2 GB.'}
                 </p>
-                <label className="mt-3 flex items-start gap-2">
+              </div>
+
+              {fileRejections.length > 0 && (
+                <div role="alert" className="rounded-control bg-surface-subtle p-3 text-sm text-status-warning">
+                  {fileRejections.map(({ file: rejectedFile, errors: rejectionErrors }) => (
+                    <p key={`${rejectedFile.name}-${rejectedFile.size}`}>
+                      {rejectedFile.name}: {rejectionErrors.map((item) => item.message).join(' ')}
+                    </p>
+                  ))}
+                </div>
+              )}
+
+              <div className="rounded-control border border-border bg-surface-subtle p-3">
+                <label className="flex items-start gap-2 text-sm">
                   <input
-                    {...register('copyrightDeclared')}
+                    {...register('isShort')}
                     type="checkbox"
-                    disabled={Boolean(videoId && copyrightDeclaredValue)}
+                    disabled={Boolean(videoId && videoStatus !== 'DRAFT')}
                     className="mt-1 accent-brand-action disabled:opacity-70"
                   />
-                  <span>I own this content or have permission to upload and publish it.</span>
+                  <div>
+                    <span className="font-medium">Publish as a Short</span>
+                    <p className="text-xs text-text-muted">Vertical portrait 9:16 format, maximum 3 minutes duration, up to 1 GB.</p>
+                    {videoId && videoStatus !== 'DRAFT' && (
+                      <p className="mt-1 text-xs text-text-muted">Short/standard format cannot change after upload starts.</p>
+                    )}
+                  </div>
                 </label>
-                {videoId && copyrightDeclaredValue && (
-                  <p className="mt-1 text-xs text-text-muted">This declaration is recorded and cannot be withdrawn from this upload.</p>
+              </div>
+
+              {(file || thumbnailPreviewUrl || thumbnailUrl) && (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {file && (
+                    <div>
+                      <div className="mb-1 flex items-center justify-between">
+                        <p className="text-sm font-medium">Video preview</p>
+                        <button
+                          type="button"
+                          onClick={() => setFile(null)}
+                          disabled={isBusy}
+                          className="text-xs text-text-muted hover:text-status-warning"
+                        >
+                          Remove video
+                        </button>
+                      </div>
+                      <video src={videoPreviewUrl ?? undefined} controls muted preload="metadata" className="aspect-video w-full rounded-card bg-black" />
+                      <p className="mt-1 truncate text-xs text-text-muted">{file.name} ({(file.size / (1024 * 1024)).toFixed(1)} MB)</p>
+                    </div>
+                  )}
+                  {(thumbnailPreviewUrl || thumbnailUrl || file) && (
+                    <div>
+                      <div className="mb-1 flex items-center justify-between">
+                        <p className="text-sm font-medium">Thumbnail preview</p>
+                        {thumbnailFile && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setThumbnailFile(null);
+                              if (thumbnailInputRef.current) thumbnailInputRef.current.value = '';
+                            }}
+                            disabled={isBusy}
+                            className="text-xs text-text-muted hover:text-status-warning"
+                          >
+                            Remove custom
+                          </button>
+                        )}
+                      </div>
+                      {thumbnailPreviewUrl || thumbnailUrl ? (
+                        <img
+                          src={thumbnailPreviewUrl || thumbnailUrl || undefined}
+                          alt="Selected video thumbnail"
+                          className={`${isShortValue ? 'aspect-[9/16]' : 'aspect-video'} max-h-48 w-full rounded-card bg-surface-subtle object-cover`}
+                        />
+                      ) : (
+                        <div className={`flex ${isShortValue ? 'aspect-[9/16]' : 'aspect-video'} max-h-48 items-center justify-center rounded-card bg-surface-subtle p-4 text-center text-xs text-text-muted`}>
+                          A thumbnail will be generated after processing, or choose a custom image.
+                        </div>
+                      )}
+                      {thumbnailFile && (
+                        <p className="mt-1 truncate text-xs text-text-muted">{thumbnailFile.name} (custom)</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="block text-sm font-medium sm:col-span-2">
+                  Title
+                  <input
+                    {...register('title', {
+                      required: 'Enter a video title.',
+                      maxLength: { value: 255, message: 'Video titles must be 255 characters or fewer.' },
+                      validate: (value) => validateUploadTitle(value) ?? true,
+                    })}
+                    maxLength={255}
+                    aria-invalid={Boolean(errors.title)}
+                    className="mt-1 w-full rounded-lg border border-border-light bg-canvas-light px-4 py-2 dark:border-border-dark dark:bg-canvas-obsidian"
+                  />
+                  <span className="mt-1 block text-right text-xs text-text-muted">{titleValue.length}/255</span>
+                  {errors.title?.message && <span role="alert" className="text-sm text-status-warning">{errors.title.message}</span>}
+                </label>
+
+                <label className="block text-sm font-medium sm:col-span-2">
+                  Description
+                  <textarea
+                    {...register('description', { maxLength: 5000 })}
+                    rows={4}
+                    maxLength={5000}
+                    className="mt-1 w-full rounded-lg border border-border-light bg-canvas-light px-4 py-2 dark:border-border-dark dark:bg-canvas-obsidian"
+                  />
+                  <span className="mt-1 block text-right text-xs text-text-muted">{descValue.length}/5000</span>
+                </label>
+
+                <label className="block text-sm font-medium">
+                  Tags and keywords
+                  <input
+                    {...register('tags')}
+                    aria-describedby="upload-tags-help"
+                    placeholder="Add comma-separated tags"
+                    className="mt-1 w-full rounded-lg border border-border-light bg-canvas-light px-4 py-2 dark:border-border-dark dark:bg-canvas-obsidian"
+                  />
+                  <span id="upload-tags-help" className="mt-1 block text-xs text-text-muted">
+                    Up to 20 tags · {getMetadata({ ...getValues(), tags: tagValue }).tags.length}/20
+                  </span>
+                </label>
+
+                <label className="block text-sm font-medium">
+                  Category
+                  <select {...register('category')} className="mt-1 w-full rounded-lg border border-border-light bg-canvas-light px-3 py-2 dark:border-border-dark dark:bg-canvas-obsidian">
+                    {categories.map((category) => <option key={category} value={category}>{category.replaceAll('_', ' ')}</option>)}
+                  </select>
+                </label>
+
+                <label className="block text-sm font-medium">
+                  Language
+                  <input
+                    {...register('language', { required: 'Enter the video language.', minLength: 2, maxLength: 35 })}
+                    maxLength={35}
+                    placeholder="e.g. en"
+                    className="mt-1 w-full rounded-lg border border-border-light bg-canvas-light px-4 py-2 dark:border-border-dark dark:bg-canvas-obsidian"
+                  />
+                </label>
+
+                <label className="block text-sm font-medium">
+                  Visibility
+                  <select {...register('visibility')} className="mt-1 w-full rounded-lg border border-border-light bg-canvas-light px-3 py-2 dark:border-border-dark dark:bg-canvas-obsidian">
+                    <option value="PUBLIC">Public</option>
+                    <option value="UNLISTED">Unlisted</option>
+                    <option value="PRIVATE">Private</option>
+                  </select>
+                </label>
+
+                <label className="flex items-start gap-2 text-sm sm:col-span-2">
+                  <input {...register('madeForKids')} type="checkbox" className="mt-1 accent-brand-action" />
+                  <span>This video is made for children.</span>
+                </label>
+
+                <label className="block text-sm font-medium sm:col-span-2">
+                  Custom thumbnail
+                  <div className="mt-1 flex items-center gap-3">
+                    <input
+                      ref={thumbnailInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      onChange={(event) => void onThumbnailSelected(event.target.files?.[0] ?? null)}
+                      className="block w-full text-sm file:mr-3 file:rounded-control file:border-0 file:bg-surface-subtle file:px-3 file:py-2"
+                    />
+                  </div>
+                  <span className="mt-1 block text-xs text-text-muted">
+                    JPEG, PNG, or WebP · 5 MB maximum · at least {isShortValue ? '180 × 320 portrait pixels' : '320 × 180 pixels'}.
+                  </span>
+                  {thumbnailError && (
+                    <span role="alert" className="mt-1 block text-xs text-status-warning">{thumbnailError}</span>
+                  )}
+                </label>
+
+                <div className="rounded-control border border-border bg-surface-subtle p-3 text-sm sm:col-span-2">
+                  <h3 className="font-semibold">Copyright and publication</h3>
+                  <p className="mt-1 text-xs text-text-muted">
+                    Only upload content you own or have permission to use. Do not upload copyrighted work without authorization.
+                    WatchTube does not currently run automated copyright matching. Creator declarations are not detection results;
+                    submitted claims are reviewed by an administrator.
+                  </p>
+                  <label className="mt-3 flex items-start gap-2">
+                    <input
+                      {...register('copyrightDeclared')}
+                      type="checkbox"
+                      disabled={Boolean(videoId && copyrightDeclaredValue)}
+                      className="mt-1 accent-brand-action disabled:opacity-70"
+                    />
+                    <span>I own this content or have permission to upload and publish it.</span>
+                  </label>
+                  {videoId && copyrightDeclaredValue && (
+                    <p className="mt-1 text-xs text-text-muted">This declaration is recorded and cannot be withdrawn from this upload.</p>
+                  )}
+                  <p className="mt-2 text-xs text-text-muted">
+                    Review status: {copyrightReviewStatus === 'BLOCKED' ? 'Blocked by a verified claim' : 'Not automatically scanned'}.
+                  </p>
+                </div>
+              </div>
+
+              {phase === 'uploading' && (
+                <div aria-live="polite">
+                  <progress aria-label="Video upload progress" max={100} value={progress} className="h-2 w-full accent-brand-action" />
+                  <p className="mt-1 text-xs text-text-muted">Uploading: {progress}%</p>
+                  <button type="button" onClick={() => uploadController.current?.abort()} className="mt-2 rounded-control border border-border px-3 py-1.5 text-sm">Cancel upload</button>
+                </div>
+              )}
+              {phase === 'verifying' && <p role="status">Verifying the uploaded file…</p>}
+              {phase === 'processing' && <p role="status">Processing privately. Your video is not published yet…</p>}
+              {(phase === 'ready-to-publish' || videoStatus === 'READY_FOR_REVIEW' || videoStatus === 'READY') && (
+                <p role="status" className="text-sm font-medium text-brand-dark">Processing complete. Review your details and publish when ready.</p>
+              )}
+              {phase === 'published' && <p role="status" className="text-sm font-medium text-status-success">Video published. Review status: {copyrightReviewStatus === 'BLOCKED' ? 'Blocked' : 'Not automatically scanned'}.</p>}
+              {videoStatus === 'UPLOADED' && <p role="status">Upload received. Retry processing to submit for transcoding.</p>}
+              {videoStatus === 'FAILED' && <p role="alert" className="text-status-warning">Processing failed. This video is not published.</p>}
+              {videoStatus === 'BLOCKED' && <p role="alert" className="text-status-warning">Publication is blocked by a verified copyright claim.</p>}
+              {error && <p role="alert" className="text-sm text-status-warning">{error}</p>}
+            </div>
+
+            <div className="flex flex-wrap justify-between gap-2 border-t border-border-light p-4 dark:border-border-dark">
+              <button type="button" onClick={onClose} disabled={isBusy} className="rounded-control px-4 py-2 text-sm font-medium disabled:opacity-50">
+                Close
+              </button>
+              <div className="ml-auto flex flex-wrap justify-end gap-2">
+                {videoId && ['UPLOADED', 'FAILED'].includes(videoStatus) && (
+                  <button type="button" onClick={retryVerification} disabled={isBusy} className="rounded-control border border-border px-4 py-2 text-sm font-semibold disabled:opacity-50">
+                    Retry processing
+                  </button>
                 )}
-                <p className="mt-2 text-xs text-text-muted">
-                  Review status: {copyrightReviewStatus === 'BLOCKED' ? 'Blocked by a verified claim' : 'Not automatically scanned'}.
-                </p>
+                {canPublish && (
+                  <button type="button" onClick={publishVideo} disabled={isBusy} className="rounded-control bg-brand-action px-5 py-2 font-bold text-brand-foreground hover:bg-brand-action-hover disabled:opacity-50">
+                    Publish video
+                  </button>
+                )}
+                {file && !['PROCESSING', 'READY_FOR_REVIEW', 'READY', 'PUBLISHED', 'FAILED', 'BLOCKED', 'REJECTED'].includes(videoStatus) && (
+                  <button type="button" onClick={beginUpload} disabled={isBusy} className="rounded-control bg-brand-action px-5 py-2 font-bold text-brand-foreground hover:bg-brand-action-hover disabled:opacity-50">
+                    {phase === 'upload-error' ? `Retry upload${uploadAttempts > 1 ? ' again' : ''}` : 'Upload video'}
+                  </button>
+                )}
+                {['ready', 'ready-to-publish', 'published', 'request-error'].includes(phase) && (
+                  <button type="submit" disabled={isBusy} className="rounded-control border border-border px-4 py-2 text-sm font-semibold hover:bg-surface-hover disabled:opacity-50">
+                    {videoId ? 'Save changes' : 'Save draft'}
+                  </button>
+                )}
               </div>
             </div>
-
-            {phase === 'uploading' && (
-              <div aria-live="polite">
-                <progress aria-label="Video upload progress" max={100} value={progress} className="h-2 w-full accent-brand-action" />
-                <p className="mt-1 text-xs text-text-muted">Uploading: {progress}%</p>
-                <button type="button" onClick={() => uploadController.current?.abort()} className="mt-2 rounded-control border border-border px-3 py-1.5 text-sm">Cancel upload</button>
-              </div>
-            )}
-            {phase === 'verifying' && <p role="status">Verifying the uploaded file…</p>}
-            {phase === 'processing' && <p role="status">Processing privately. Your video is not published yet…</p>}
-            {phase === 'ready-to-publish' && <p role="status">Processing complete. Review your details and publish when ready.</p>}
-            {phase === 'published' && <p role="status">Video published. Copyright review status: {copyrightReviewStatus === 'BLOCKED' ? 'Blocked' : 'Not automatically scanned'}.</p>}
-            {videoStatus === 'UPLOADED' && <p role="status">Upload received. Retry verification to start processing.</p>}
-            {videoStatus === 'FAILED' && <p role="alert">Processing failed. This video is not published.</p>}
-            {videoStatus === 'BLOCKED' && <p role="alert">Publication is blocked by a verified copyright claim.</p>}
-            {error && <p role="alert" className="text-sm text-status-warning">{error}</p>}
-          </div>
-
-          <div className="flex flex-wrap justify-between gap-2 border-t border-border-light p-4 dark:border-border-dark">
-            <button type="button" onClick={onClose} disabled={isBusy} className="rounded-control px-4 py-2 text-sm font-medium disabled:opacity-50">
-              Close
-            </button>
-            <div className="ml-auto flex flex-wrap justify-end gap-2">
-              {videoId && ['UPLOADED', 'FAILED'].includes(videoStatus) && (
-                <button type="button" onClick={retryVerification} disabled={isBusy} className="rounded-control border border-border px-4 py-2 text-sm font-semibold disabled:opacity-50">
-                  Retry processing
-                </button>
-              )}
-              {phase === 'ready-to-publish' && videoId && (
-                <button type="button" onClick={publishVideo} disabled={isBusy} className="rounded-control bg-brand-action px-5 py-2 font-bold text-brand-foreground disabled:opacity-50">
-                  Publish video
-                </button>
-              )}
-              {file && !['PROCESSING', 'READY_FOR_REVIEW', 'PUBLISHED', 'FAILED', 'BLOCKED', 'REJECTED'].includes(videoStatus) && (
-                <button type="button" onClick={beginUpload} disabled={isBusy} className="rounded-control bg-brand-action px-5 py-2 font-bold text-brand-foreground disabled:opacity-50">
-                  {phase === 'upload-error' ? `Retry upload${uploadAttempts > 1 ? ' again' : ''}` : 'Upload video'}
-                </button>
-              )}
-              {['ready', 'ready-to-publish', 'published', 'request-error'].includes(phase) && (
-                <button type="submit" disabled={isBusy} className="rounded-control border border-border px-4 py-2 text-sm font-semibold disabled:opacity-50">
-                  {videoId ? 'Save changes' : 'Save draft'}
-                </button>
-              )}
-            </div>
-          </div>
-        </form>
+          </form>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
-import { Link } from 'react-router-dom';
+import { SignInLink } from '../components/account/SignInLink';
 import { apiClient, getApiErrorMessage } from '../api/apiClient';
 import { VideoCard } from '../components/video/VideoCard';
 import { EmptyState, ErrorState, LoadingState } from '../components/video/ViewerState';
@@ -55,9 +55,9 @@ export function SubscriptionsPage() {
         <div className="mx-auto max-w-xl py-16 text-center">
           <h2 className="font-semibold">Sign in to see your subscriptions</h2>
           <p className="mt-2 text-sm text-text-muted">Your subscribed channels and their latest videos will appear here.</p>
-          <Link to="/auth/login" className="mt-5 inline-flex rounded-control bg-brand-action px-5 py-2.5 font-semibold text-brand-foreground hover:bg-brand-action-hover">
+          <SignInLink className="mt-5 inline-flex rounded-control bg-brand-action px-5 py-2.5 font-semibold text-brand-foreground hover:bg-brand-action-hover">
             Sign in
-          </Link>
+          </SignInLink>
         </div>
       ) : error ? (
         <ErrorState message={error} onRetry={() => setRequestNumber((number) => number + 1)} />

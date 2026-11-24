@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ChannelImageUploadError, uploadChannelImage, } from '../src/api/channelImageUpload.js';
+import axios from 'axios';
+import { ChannelImageUploadError, getChannelImageUploadErrorMessage, uploadChannelImage, } from '../src/api/channelImageUpload.js';
 const CHANNEL_ID = '33333333-3333-4333-8333-333333333333';
 const IMAGE_URL = 'https://media.example/channel-images/avatar.webp';
 const channel = {
@@ -66,4 +67,19 @@ test('upload failures do not confirm, and confirmation failures retain the ticke
     await assert.rejects(uploadChannelImage(confirmationFailureDependencies, { channelId: CHANNEL_ID, purpose: 'avatar', contentType: 'image/png', fileSize: 10 }, createFile(), () => undefined), (error) => (error instanceof ChannelImageUploadError
         && error.stage === 'confirmation'
         && error.intent?.uploadToken === 'signed-upload-ticket'));
+});
+test('upload network failures identify storage instead of blaming the API', () => {
+    const error = new ChannelImageUploadError('upload', new axios.AxiosError('Network Error', 'ERR_NETWORK'));
+    assert.match(getChannelImageUploadErrorMessage(error, 'Upload failed.'), /transferred to storage/i);
+    assert.doesNotMatch(getChannelImageUploadErrorMessage(error, 'Upload failed.'), /WatchTube API could not be reached/i);
+});
+test('upload intent shows safe storage configuration errors returned by the API', () => {
+    const error = new ChannelImageUploadError('intent', Object.assign(new Error('Request failed'), {
+        isAxiosError: true,
+        response: {
+            status: 503,
+            data: { error: 'Cloud storage is not configured. Missing environment variable: R2_PUBLIC_DOMAIN or R2_BUCKET_PUBLIC_URL.' },
+        },
+    }));
+    assert.match(getChannelImageUploadErrorMessage(error, 'Upload failed.'), /R2_PUBLIC_DOMAIN or R2_BUCKET_PUBLIC_URL/);
 });

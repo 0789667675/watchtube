@@ -10,6 +10,7 @@ const node_test_1 = require("node:test");
 const channel_image_upload_route_1 = require("../src/routes/channel-image-upload.route");
 const channel_route_1 = require("../src/routes/channel.route");
 const channel_image_service_1 = require("../src/services/channel-image.service");
+const storage_service_1 = require("../src/services/storage.service");
 const OWNER_ID = '11111111-1111-4111-8111-111111111111';
 const OTHER_USER_ID = '22222222-2222-4222-8222-222222222222';
 const CHANNEL_ID = '33333333-3333-4333-8333-333333333333';
@@ -44,6 +45,8 @@ async function createHarness() {
         missingObject: false,
         invalidImage: false,
         storageFailure: false,
+        storageUnavailable: false,
+        persistenceFailure: false,
     };
     const authenticate = (req, res, next) => {
         const userId = req.get('x-test-user');
@@ -65,6 +68,8 @@ async function createHarness() {
             },
             updateOwnedImage: async (channelId, userId, purpose, imageUrl) => {
                 calls.updates.push({ channelId, userId, purpose, imageUrl });
+                if (calls.persistenceFailure)
+                    throw new Error('simulated database persistence failure');
                 const channel = channels.find((item) => item.id === channelId && item.userId === userId);
                 if (!channel)
                     return null;
@@ -86,6 +91,9 @@ async function createHarness() {
             },
             publishUploadedImage: async (input) => {
                 calls.published.push(input);
+                if (calls.storageUnavailable) {
+                    throw new storage_service_1.StorageUnavailableError('Cloud storage is not configured. Missing environment variable: R2_PUBLIC_DOMAIN or R2_BUCKET_PUBLIC_URL.');
+                }
                 if (calls.storageFailure)
                     throw new Error('simulated object storage failure');
                 if (calls.invalidImage)
@@ -248,6 +256,42 @@ async function requestIntent(harness, purpose = 'avatar', body = { contentType: 
     }
     strict_1.default.equal(response.status, 503);
     strict_1.default.equal(harness.calls.updates.length, 0);
+});
+(0, node_test_1.test)('confirmation reports missing storage configuration without exposing credentials', async () => {
+    const harness = await createHarness();
+    const { uploadToken } = await requestIntent(harness);
+    harness.calls.storageUnavailable = true;
+    const originalConsoleError = console.error;
+    console.error = () => undefined;
+    let response;
+    try {
+        response = await post(harness.baseUrl, `/api/v1/channels/${CHANNEL_ID}/images/avatar/confirm`, { uploadToken });
+    }
+    finally {
+        console.error = originalConsoleError;
+    }
+    strict_1.default.equal(response.status, 503);
+    const body = await response.json();
+    strict_1.default.match(body.error, /R2_PUBLIC_DOMAIN or R2_BUCKET_PUBLIC_URL/);
+    strict_1.default.doesNotMatch(body.error, /access.?key|secret|password/i);
+    strict_1.default.equal(harness.calls.updates.length, 0);
+});
+(0, node_test_1.test)('confirmation reports persistence failures without returning a successful image URL', async () => {
+    const harness = await createHarness();
+    const { uploadToken } = await requestIntent(harness);
+    harness.calls.persistenceFailure = true;
+    const originalConsoleError = console.error;
+    console.error = () => undefined;
+    let response;
+    try {
+        response = await post(harness.baseUrl, `/api/v1/channels/${CHANNEL_ID}/images/avatar/confirm`, { uploadToken });
+    }
+    finally {
+        console.error = originalConsoleError;
+    }
+    strict_1.default.equal(response.status, 500);
+    strict_1.default.deepEqual(await response.json(), { error: 'Internal server error' });
+    strict_1.default.equal(harness.calls.updates.length, 1);
 });
 (0, node_test_1.test)('a valid ticket cannot be replayed for another channel or by another user', async () => {
     const harness = await createHarness();

@@ -3,14 +3,11 @@
  *
  * Requirements:
  * 1. Single source of truth for token signing and verification across the API.
- * 2. In production (NODE_ENV=production), startup MUST fail if JWT_SECRET is
- *    absent, blank, insecure, or shorter than 32 characters.
- * 3. In development / testing, a fallback default is permitted with a clear warning.
+ * 2. Outside explicit development/test mode, startup MUST fail if JWT_SECRET is
+ *    absent, blank, insecure, a placeholder, or shorter than 32 characters.
+ * 3. Only development and testing may use the fallback, with a clear warning.
  * 4. Never echo or expose secrets in log output or error messages.
  */
-
-const isProduction = process.env.NODE_ENV === 'production';
-const rawSecret = process.env.JWT_SECRET?.trim();
 
 const INSECURE_FALLBACKS = [
   'supersecret',
@@ -24,27 +21,48 @@ const INSECURE_FALLBACKS = [
   'jwtsecret',
 ];
 
-export function resolveJwtSecret(): string {
-  if (isProduction) {
-    if (!rawSecret) {
+const PLACEHOLDER_PREFIXES = ['replace_with_', 'your_', 'example_', 'placeholder_'];
+
+export interface JwtSecretOptions {
+  nodeEnv?: string;
+  secret?: string;
+}
+
+export function resolveJwtSecret(options: JwtSecretOptions = {}): string {
+  const nodeEnv = Object.prototype.hasOwnProperty.call(options, 'nodeEnv')
+    ? options.nodeEnv
+    : process.env.NODE_ENV;
+  const rawSecret = (options.secret ?? process.env.JWT_SECRET)?.trim();
+  const allowsFallback = nodeEnv === 'development' || nodeEnv === 'test';
+
+  if (!rawSecret) {
+    if (allowsFallback) {
+      console.warn(
+        '[SECURITY WARNING] JWT_SECRET is not configured. Falling back to development default. Never use this in production.'
+      );
+      return 'supersecret';
+    }
+
+    if (nodeEnv === 'production') {
       throw new Error(
         '[FATAL] Production startup rejected: JWT_SECRET environment variable is missing or empty. A secure secret of at least 32 characters is required.'
       );
     }
-    if (INSECURE_FALLBACKS.includes(rawSecret.toLowerCase()) || rawSecret.length < 32) {
-      throw new Error(
-        '[FATAL] Production startup rejected: JWT_SECRET must be at least 32 characters and cannot use a known default or insecure fallback.'
-      );
-    }
-    return rawSecret;
+    throw new Error(
+      '[FATAL] Startup rejected: JWT_SECRET is required outside explicit development or test mode.'
+    );
   }
 
-  // Development and test fallback
-  if (!rawSecret) {
-    console.warn(
-      '[SECURITY WARNING] JWT_SECRET is not configured. Falling back to development default. Never use this in production.'
+  const normalizedSecret = rawSecret.toLowerCase();
+  const isPlaceholder = PLACEHOLDER_PREFIXES.some((prefix) => normalizedSecret.startsWith(prefix));
+  if (!allowsFallback && (
+    INSECURE_FALLBACKS.includes(normalizedSecret)
+    || rawSecret.length < 32
+    || isPlaceholder
+  )) {
+    throw new Error(
+      '[FATAL] Startup rejected: JWT_SECRET must be at least 32 characters and cannot use a known default, placeholder, or insecure fallback outside development or test mode.'
     );
-    return 'supersecret';
   }
 
   return rawSecret;

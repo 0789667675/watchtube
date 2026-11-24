@@ -3,6 +3,7 @@ import axios from 'axios';
 import { Link, useOutletContext } from 'react-router-dom';
 import { MessageSquareText, Trash2 } from 'lucide-react';
 import { apiClient, getApiErrorMessage } from '../../api/apiClient';
+import { SignInLink } from '../../components/account/SignInLink';
 import { isStudioCommentPage } from './studioApi';
 import type { StudioCommentPage, StudioOutletContext } from './studioApi';
 
@@ -223,7 +224,7 @@ export function CommentsPage() {
           <div role="alert" className="flex flex-wrap items-center justify-between gap-3 p-6">
             <p className="text-sm text-text-muted">{currentResult.message}</p>
             {currentResult.unauthorized ? (
-              <Link to="/auth/login" className="text-sm font-semibold text-brand-dark hover:underline">Sign in again</Link>
+              <SignInLink className="text-sm font-semibold text-brand-dark hover:underline">Sign in again</SignInLink>
             ) : (
               <button
                 type="button"

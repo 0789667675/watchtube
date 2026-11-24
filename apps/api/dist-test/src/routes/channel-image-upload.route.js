@@ -5,6 +5,7 @@ const express_1 = require("express");
 const jsonwebtoken_1 = require("jsonwebtoken");
 const zod_1 = require("zod");
 const channel_image_service_1 = require("../services/channel-image.service");
+const storage_service_1 = require("../services/storage.service");
 const databaseErrors_1 = require("../config/databaseErrors");
 const PURPOSES = ['avatar', 'banner'];
 const CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -39,8 +40,12 @@ function sendRepositoryError(res, error) {
     console.error('Channel image settings could not be persisted.');
     (0, databaseErrors_1.sendDatabaseErrorResponse)(res, error, 'Channel settings are temporarily unavailable because the database is unavailable.');
 }
-function sendStorageError(res) {
+function sendStorageError(res, error) {
     console.error('Channel image storage operation failed.');
+    if (error instanceof storage_service_1.StorageUnavailableError) {
+        res.status(503).json({ error: error.message });
+        return;
+    }
     res.status(503).json({ error: 'Channel image upload is temporarily unavailable.' });
 }
 function getTicketClaims(token, ticketSecret) {
@@ -103,7 +108,7 @@ function createChannelImageUploadRouter(dependencies) {
                 res.status(400).json({ error: error.message });
                 return;
             }
-            sendStorageError(res);
+            sendStorageError(res, error);
             return;
         }
         const uploadToken = (0, jsonwebtoken_1.sign)({
@@ -170,7 +175,7 @@ function createChannelImageUploadRouter(dependencies) {
                 res.status(400).json({ error: error.message });
                 return;
             }
-            sendStorageError(res);
+            sendStorageError(res, error);
             return;
         }
         if (!imageUrl) {

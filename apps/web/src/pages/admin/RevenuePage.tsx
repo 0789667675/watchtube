@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { apiClient } from '../../api/apiClient';
 import { Scale } from 'lucide-react';
+import { ShortsRateSettingsCard } from './ShortsRateSettings';
 
 export const RevenuePage: React.FC = () => {
   const [escrows, setEscrows] = useState<any[]>([]);
@@ -43,6 +44,8 @@ export const RevenuePage: React.FC = () => {
   return (
     <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-6">
       <h1 className="text-2xl font-bold font-display">Revenue &amp; Escrow Management</h1>
+
+      <ShortsRateSettingsCard />
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <div className="rounded-xl border border-border-light bg-surface-light p-6 shadow-sm dark:border-border-dark dark:bg-surface-dark">

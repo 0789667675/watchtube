@@ -14,6 +14,7 @@ const storageEnvironmentNames = [
     'R2_BUCKET_PUBLIC',
     'R2_PUBLIC_DOMAIN',
     'R2_BUCKET_PUBLIC_URL',
+    'WATCHTUBE_TEST_S3_ENDPOINT',
 ];
 async function withoutStorageConfiguration(run) {
     const previous = storageEnvironmentNames.map((name) => process.env[name]);
@@ -74,6 +75,19 @@ async function withoutStorageConfiguration(run) {
         strict_1.default.doesNotMatch(JSON.stringify(status), /not-an-account-id/);
     });
 });
+(0, node_test_1.test)('storage readiness reports configured when all required variables are valid', async () => {
+    await withoutStorageConfiguration(() => {
+        process.env.CLOUDFLARE_ACCOUNT_ID = '0123456789abcdef0123456789abcdef';
+        process.env.R2_ACCESS_KEY_ID = 'test-key-id-valid';
+        process.env.R2_SECRET_ACCESS_KEY = 'test-secret-key-valid';
+        process.env.R2_BUCKET_RAW = 'watchtube-raw-uploads';
+        process.env.R2_BUCKET_PUBLIC = 'watchtube-media-public';
+        process.env.R2_PUBLIC_DOMAIN = 'https://media.example.test';
+        const status = (0, storage_service_1.getStorageConfigurationStatus)();
+        strict_1.default.equal(status.status, 'configured');
+        strict_1.default.deepEqual(status.missing, []);
+    });
+});
 (0, node_test_1.test)('presigned storage operations fail before contacting R2 when credentials are absent', async () => {
     await withoutStorageConfiguration(async () => {
         await strict_1.default.rejects((0, storage_service_1.generatePresignedUploadUrl)('11111111-1111-4111-8111-111111111111', 'video/mp4', 1024), (error) => {
@@ -101,5 +115,45 @@ async function withoutStorageConfiguration(run) {
         strict_1.default.match(signedUrl.searchParams.get('X-Amz-Credential') ?? '', /test-access-key/);
         strict_1.default.equal(signedUrl.searchParams.get('X-Amz-Expires'), '900');
         strict_1.default.equal(signedUrl.searchParams.get('X-Amz-Signature')?.length, 64);
+        strict_1.default.equal(signedUrl.searchParams.get('X-Amz-SignedHeaders'), 'host');
+        strict_1.default.equal(signedUrl.searchParams.get('x-amz-checksum-crc32'), null);
+        strict_1.default.equal(signedUrl.searchParams.get('x-amz-sdk-checksum-algorithm'), null);
+        const thumbnailTarget = await (0, storage_service_1.createVideoThumbnailUploadTarget)('11111111-1111-4111-8111-111111111111', 'image/webp', 2048);
+        const thumbUrl = new URL(thumbnailTarget.uploadUrl);
+        strict_1.default.equal(thumbUrl.searchParams.get('X-Amz-SignedHeaders'), 'host');
+        strict_1.default.equal(thumbUrl.searchParams.get('X-Amz-Signature')?.length, 64);
+    });
+});
+(0, node_test_1.test)('published rendition playlist matching includes Shorts 540p alongside standard renditions', () => {
+    strict_1.default.equal((0, storage_service_1.extractPublishedRenditionName)('360p.m3u8'), '360p');
+    strict_1.default.equal((0, storage_service_1.extractPublishedRenditionName)('540p.m3u8'), '540p');
+    strict_1.default.equal((0, storage_service_1.extractPublishedRenditionName)('720p.m3u8'), '720p');
+    strict_1.default.equal((0, storage_service_1.extractPublishedRenditionName)('1080p.m3u8'), '1080p');
+    strict_1.default.equal((0, storage_service_1.extractPublishedRenditionName)('master.m3u8'), null);
+    strict_1.default.equal((0, storage_service_1.extractPublishedRenditionName)('360p_000.ts'), null);
+});
+(0, node_test_1.test)('loopback test S3 endpoint override rejects non-loopback hosts and is disabled in production', async () => {
+    await withoutStorageConfiguration(async () => {
+        const previousNodeEnv = process.env.NODE_ENV;
+        process.env.CLOUDFLARE_ACCOUNT_ID = '0123456789abcdef0123456789abcdef';
+        process.env.R2_ACCESS_KEY_ID = 'test-access-key';
+        process.env.R2_SECRET_ACCESS_KEY = 'test-secret-key';
+        process.env.R2_BUCKET_RAW = 'watchtube-raw-uploads';
+        process.env.R2_BUCKET_PUBLIC = 'watchtube-media-public';
+        process.env.R2_PUBLIC_DOMAIN = 'https://media.example.test';
+        try {
+            process.env.NODE_ENV = 'test';
+            process.env.WATCHTUBE_TEST_S3_ENDPOINT = 'https://evil.example.com';
+            await strict_1.default.rejects(() => (0, storage_service_1.generatePresignedUploadUrl)('11111111-1111-4111-8111-111111111111', 'video/mp4', 1024, 'uploads/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222'), storage_service_1.StorageUnavailableError);
+            process.env.NODE_ENV = 'production';
+            const target = await (0, storage_service_1.generatePresignedUploadUrl)('11111111-1111-4111-8111-111111111111', 'video/mp4', 1024, 'uploads/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222');
+            strict_1.default.equal(new URL(target.uploadUrl).hostname, 'watchtube-raw-uploads.0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com');
+        }
+        finally {
+            if (previousNodeEnv === undefined)
+                delete process.env.NODE_ENV;
+            else
+                process.env.NODE_ENV = previousNodeEnv;
+        }
     });
 });

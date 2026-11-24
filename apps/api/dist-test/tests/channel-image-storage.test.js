@@ -8,6 +8,7 @@ const node_test_1 = require("node:test");
 const sharp_1 = __importDefault(require("sharp"));
 const storage_service_1 = require("../src/services/storage.service");
 const channel_image_service_1 = require("../src/services/channel-image.service");
+const storage_service_2 = require("../src/services/storage.service");
 const CHANNEL_ID = '33333333-3333-4333-8333-333333333333';
 const UPLOAD_ID = '55555555-5555-4555-8555-555555555555';
 async function createHarness(bytes) {
@@ -166,6 +167,34 @@ const confirmation = {
     });
     await strict_1.default.rejects(insecureStorage.publishUploadedImage({ ...confirmation, fileSize: bytes.length }), /Public media URL configuration is invalid/);
     strict_1.default.equal(publicWrites.length, 0);
+});
+(0, node_test_1.test)('missing public media URL reports configuration names before creating an upload target', async () => {
+    const bytes = await validAvatarPng();
+    const { calls } = await createHarness(bytes);
+    const storage = (0, storage_service_1.createChannelImageStorageService)({
+        async createSignedUploadUrl(input) {
+            calls.signedTargets.push(input);
+            return 'https://upload.example/presigned';
+        },
+        async getObjectMetadata() { return null; },
+        async getObjectBytes() { return null; },
+        async putPublicObject(input) { calls.publicWrites.push(input); },
+    }, {
+        rawBucket: 'private-raw',
+        publicBucket: 'existing-public',
+        publicDomain: 'your_public_domain',
+    });
+    await strict_1.default.rejects(storage.createUploadTarget({
+        channelId: CHANNEL_ID,
+        purpose: 'avatar',
+        contentType: 'image/png',
+        fileSize: 1024,
+    }), (error) => {
+        strict_1.default.ok(error instanceof storage_service_2.StorageUnavailableError);
+        strict_1.default.match(error.message, /R2_PUBLIC_DOMAIN or R2_BUCKET_PUBLIC_URL/);
+        return true;
+    });
+    strict_1.default.equal(calls.signedTargets.length, 0);
 });
 (0, node_test_1.test)('HTTP public domain configuration is served over HTTPS like the video worker', async () => {
     const bytes = await validAvatarPng();

@@ -85,3 +85,33 @@ test('video thumbnails validate their image bytes and normalize to a 1280 by 720
   await assert.rejects(processVideoThumbnail(await createPng(100, 100), 'image/png'), InvalidChannelImageError);
   await assert.rejects(processVideoThumbnail(await createPng(640, 480), 'image/jpeg'), InvalidChannelImageError);
 });
+
+test('Short thumbnails require portrait dimensions and normalize to a 720 by 1280 WebP', async () => {
+  const output = await processVideoThumbnail(await createPng(360, 640), 'image/png', true);
+  const metadata = await sharp(output).metadata();
+  assert.equal(metadata.format, 'webp');
+  assert.equal(metadata.width, 720);
+  assert.equal(metadata.height, 1280);
+
+  const orientedJpeg = await sharp({
+    create: {
+      width: 640,
+      height: 360,
+      channels: 3,
+      background: { r: 12, g: 100, b: 220 },
+    },
+  }).jpeg().withMetadata({ orientation: 6 }).toBuffer();
+  const orientedOutput = await processVideoThumbnail(orientedJpeg, 'image/jpeg', true);
+  const orientedMetadata = await sharp(orientedOutput).metadata();
+  assert.equal(orientedMetadata.width, 720);
+  assert.equal(orientedMetadata.height, 1280);
+
+  await assert.rejects(
+    processVideoThumbnail(await createPng(640, 480), 'image/png', true),
+    InvalidChannelImageError,
+  );
+  await assert.rejects(
+    processVideoThumbnail(await createPng(100, 300), 'image/png', true),
+    InvalidChannelImageError,
+  );
+});

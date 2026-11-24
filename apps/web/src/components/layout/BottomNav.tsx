@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, TrendingUp, Video, Upload } from 'lucide-react';
+import { Home, TrendingUp, Video, Upload, Clapperboard } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
 
 export const BottomNav: React.FC = () => {
@@ -8,6 +8,7 @@ export const BottomNav: React.FC = () => {
       {[
         { to: '/', label: 'Home', icon: Home, end: true },
         { to: '/feed/trending', label: 'Trending', icon: TrendingUp },
+        { to: '/feed/shorts', label: 'Shorts', icon: Clapperboard },
         { to: '/feed/subscriptions', label: 'Subs', icon: Video },
         { to: '/studio', label: 'Create', icon: Upload },
       ].map(({ to, label, icon: Icon, end }) => (
@@ -15,7 +16,7 @@ export const BottomNav: React.FC = () => {
           key={to}
           to={to}
           end={end}
-          className={({ isActive }) =>
+          className={({ isActive }: { isActive: boolean }) =>
             `relative flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-1 transition-colors focus-visible:z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus ${
               isActive ? 'text-brand-dark' : 'text-text-muted hover:text-text-primary'
             }`

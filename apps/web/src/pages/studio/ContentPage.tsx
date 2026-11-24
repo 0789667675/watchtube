@@ -3,11 +3,13 @@ import axios from 'axios';
 import { Link, useOutletContext } from 'react-router-dom';
 import { UploadModal } from '../../components/studio/UploadModal';
 import { ChannelOnboardingModal } from '../../components/studio/ChannelOnboardingModal';
+import { SignInLink } from '../../components/account/SignInLink';
 import { apiClient, getApiErrorMessage } from '../../api/apiClient';
 import type { StudioChannel, StudioOutletContext } from './studioApi';
 
 interface OwnedVideo {
   id: string;
+  isShort?: boolean;
   channelId: string;
   title: string;
   status: string;
@@ -37,6 +39,7 @@ export function ContentPage() {
     unauthorized: false,
   });
   const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [uploadIsShort, setUploadIsShort] = useState(false);
   const [videoToEdit, setVideoToEdit] = useState<string | null>(null);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(profile.channels.length === 0);
 
@@ -108,11 +111,19 @@ export function ContentPage() {
           </button>
           <button
             type="button"
-            onClick={() => { setVideoToEdit(null); setIsUploadOpen(true); }}
+            onClick={() => { setVideoToEdit(null); setUploadIsShort(false); setIsUploadOpen(true); }}
             disabled={!selectedChannelId}
             className="rounded-control bg-brand-action px-4 py-2 text-sm font-semibold text-brand-foreground transition hover:bg-brand-action-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             Upload video
+          </button>
+          <button
+            type="button"
+            onClick={() => { setVideoToEdit(null); setUploadIsShort(true); setIsUploadOpen(true); }}
+            disabled={!selectedChannelId}
+            className="rounded-control border border-border px-4 py-2 text-sm font-semibold transition hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Upload Short
           </button>
         </div>
       </header>
@@ -121,7 +132,7 @@ export function ContentPage() {
         <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-control border border-border bg-surface-light p-4 text-sm dark:bg-surface-dark">
           <span>{contentError}</span>
           {isUnauthorized ? (
-            <Link to="/auth/login" className="font-semibold text-brand-dark hover:underline">Sign in again</Link>
+            <SignInLink className="font-semibold text-brand-dark hover:underline">Sign in again</SignInLink>
           ) : (
             <button type="button" onClick={refreshVideos} className="font-semibold text-brand-dark hover:underline">
               Retry
@@ -153,7 +164,7 @@ export function ContentPage() {
                 </p>
                 <button
                   type="button"
-                  onClick={() => { setVideoToEdit(null); setIsUploadOpen(true); }}
+                  onClick={() => { setVideoToEdit(null); setUploadIsShort(false); setIsUploadOpen(true); }}
                   disabled={!selectedChannelId}
                   className="mt-4 rounded-control bg-brand-action px-4 py-2 text-sm font-semibold text-brand-foreground hover:bg-brand-action-hover disabled:opacity-50"
                 >
@@ -203,12 +214,20 @@ export function ContentPage() {
                       <td className="px-4 py-4">{channel?.name ?? 'Channel unavailable'}</td>
                       <td className="px-4 py-4">{video.visibility}</td>
                       <td className="px-4 py-4">
-                        <span className="rounded-full bg-surface-subtle px-2.5 py-1 text-xs font-medium">{video.status}</span>
+                        <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${
+                          ['PUBLISHED', 'READY'].includes(video.status)
+                            ? 'bg-status-success/15 text-status-success'
+                            : ['FAILED', 'BLOCKED', 'REJECTED'].includes(video.status)
+                              ? 'bg-status-warning/15 text-status-warning'
+                              : 'bg-surface-subtle text-text-muted'
+                        }`}>
+                          {video.isShort ? 'SHORT · ' : ''}{video.status.replaceAll('_', ' ')}
+                        </span>
                       </td>
                       <td className="px-4 py-4">
                         <button
                           type="button"
-                          onClick={() => { setVideoToEdit(video.id); setIsUploadOpen(true); }}
+                          onClick={() => { setVideoToEdit(video.id); setUploadIsShort(Boolean(video.isShort)); setIsUploadOpen(true); }}
                           className="font-semibold text-brand-dark hover:underline"
                         >
                           Edit
@@ -229,6 +248,7 @@ export function ContentPage() {
         isOpen={isUploadOpen}
         channelId={selectedChannelId}
         initialVideoId={videoToEdit}
+        initialIsShort={uploadIsShort}
         onClose={() => { setIsUploadOpen(false); setVideoToEdit(null); }}
         onUploaded={refreshVideos}
       />

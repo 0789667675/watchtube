@@ -93,8 +93,25 @@ export function getStorageConfigurationStatus(requirePublicMediaUrl = true): Sto
     };
 }
 
+function resolveLoopbackTestS3Endpoint(): string | undefined {
+    if (process.env.NODE_ENV === 'production') return undefined;
+    const raw = process.env.WATCHTUBE_TEST_S3_ENDPOINT?.trim();
+    if (!raw) return undefined;
+    let parsed: URL;
+    try {
+        parsed = new URL(raw);
+    } catch {
+        throw new StorageUnavailableError('WATCHTUBE_TEST_S3_ENDPOINT must be a valid HTTP URL.');
+    }
+    if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1') {
+        throw new StorageUnavailableError('WATCHTUBE_TEST_S3_ENDPOINT must target loopback 127.0.0.1.');
+    }
+    return parsed.origin;
+}
+
 function getStorageClient(): S3Client {
-    if (s3Client) return s3Client;
+    const testEndpoint = resolveLoopbackTestS3Endpoint();
+    if (s3Client && !testEndpoint) return s3Client;
 
     const missing = [
         ...(!isValidAccountId(process.env.CLOUDFLARE_ACCOUNT_ID) ? ['CLOUDFLARE_ACCOUNT_ID'] : []),
@@ -107,15 +124,21 @@ function getStorageClient(): S3Client {
         );
     }
 
-    s3Client = new S3Client({
+    const client = new S3Client({
         region: 'auto',
-        endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+        endpoint: testEndpoint ?? `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+        ...(testEndpoint ? { forcePathStyle: true } : {}),
+        requestChecksumCalculation: 'WHEN_REQUIRED',
+        responseChecksumValidation: 'WHEN_REQUIRED',
         credentials: {
             accessKeyId: process.env.R2_ACCESS_KEY_ID!,
             secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
         },
     });
-    return s3Client;
+    if (!testEndpoint) {
+        s3Client = client;
+    }
+    return client;
 }
 
 function getRawBucket(): string {
@@ -163,7 +186,6 @@ export async function generatePresignedUploadUrl(
         Bucket: getRawBucket(),
         Key: fileKey,
         ContentType: contentType,
-        ContentLength: fileSize,
     });
 
     const uploadUrl = await getSignedUrl(getStorageClient(), command, { expiresIn: UPLOAD_URL_TTL_SECONDS });
@@ -193,6 +215,17 @@ function getPublicObjectContentType(key: string): string {
     throw new Error('Unsupported processed media file type.');
 }
 
+export function isValidProcessedThumbnailKey(videoId: string, key: string): boolean {
+    const prefix = `processing/${videoId}/`;
+    if (!key.startsWith(prefix)) return false;
+    const filename = key.slice(prefix.length);
+    return filename === 'poster.jpg' || /^custom-thumbnail-[0-9a-f-]{36}\.webp$/i.test(filename);
+}
+
+export function extractPublishedRenditionName(filename: string): string | null {
+    return /^(360p|540p|720p|1080p)\.m3u8$/.exec(filename)?.[1] ?? null;
+}
+
 export async function publishProcessedVideoAssets(
     videoId: string,
     selectedThumbnailKey?: string,
@@ -216,10 +249,7 @@ export async function publishProcessedVideoAssets(
     const playlistUrls: Record<string, string> = {};
     if (
         selectedThumbnailKey
-        && (
-            !selectedThumbnailKey.startsWith(prefix)
-            || !/^custom-thumbnail-[0-9a-f-]{36}\.webp$/i.test(selectedThumbnailKey.slice(prefix.length))
-        )
+        && !isValidProcessedThumbnailKey(videoId, selectedThumbnailKey)
     ) {
         throw new Error('Invalid video thumbnail storage key.');
     }
@@ -251,7 +281,7 @@ export async function publishProcessedVideoAssets(
                 if (isCustomThumbnail) {
                     customThumbnailUrl = getPublicMediaUrl(publicDomain, publicKey);
                 }
-                const rendition = /^(360p|720p|1080p)\.m3u8$/.exec(filename)?.[1];
+                const rendition = extractPublishedRenditionName(filename);
                 if (rendition) playlistUrls[rendition] = getPublicMediaUrl(publicDomain, publicKey);
             }
             continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
@@ -318,7 +348,6 @@ export async function createVideoThumbnailUploadTarget(
         Bucket: getRawBucket(),
         Key: storageKey,
         ContentType: contentType,
-        ContentLength: fileSize,
     }), { expiresIn: UPLOAD_URL_TTL_SECONDS });
     return { uploadUrl, storageKey, expiresIn: UPLOAD_URL_TTL_SECONDS };
 }
@@ -327,6 +356,7 @@ export async function normalizeUploadedVideoThumbnail(
     storageKey: string,
     contentType: string,
     fileSize: number,
+    isShort = false,
 ): Promise<boolean> {
     if (
         !/^processing\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/custom-thumbnail-[0-9a-f-]{36}\.webp$/i.test(storageKey)
@@ -361,7 +391,11 @@ export async function normalizeUploadedVideoThumbnail(
         throw new InvalidChannelImageError('Uploaded thumbnail metadata does not match the authorized upload.');
     }
 
-    const normalized = await processVideoThumbnail(Buffer.concat(chunks, totalBytes), contentType);
+    const normalized = await processVideoThumbnail(
+        Buffer.concat(chunks, totalBytes),
+        contentType,
+        isShort,
+    );
     await getStorageClient().send(new PutObjectCommand({
         Bucket: getRawBucket(),
         Key: storageKey,
@@ -414,11 +448,18 @@ export interface ChannelImageStorageConfig {
 function getPublicMediaBaseUrl(publicDomain: string): URL {
     const configuredDomain = publicDomain.trim().split(/\s+/)[0];
     if (!hasConfiguredValue(configuredDomain)) {
-        throw new Error('Public media URL is not configured.');
+        throw new StorageUnavailableError(
+            'Cloud storage is not configured. Missing environment variable: R2_PUBLIC_DOMAIN or R2_BUCKET_PUBLIC_URL.',
+        );
     }
 
     const httpsDomain = configuredDomain.replace(/^http:\/\//i, 'https://');
-    const baseUrl = new URL(httpsDomain.includes('://') ? httpsDomain : `https://${httpsDomain}`);
+    let baseUrl: URL;
+    try {
+        baseUrl = new URL(httpsDomain.includes('://') ? httpsDomain : `https://${httpsDomain}`);
+    } catch {
+        throw new StorageUnavailableError('Public media URL configuration is invalid.');
+    }
     if (
         baseUrl.protocol !== 'https:'
         || baseUrl.username
@@ -426,7 +467,7 @@ function getPublicMediaBaseUrl(publicDomain: string): URL {
         || baseUrl.search
         || baseUrl.hash
     ) {
-        throw new Error('Public media URL configuration is invalid.');
+        throw new StorageUnavailableError('Public media URL configuration is invalid.');
     }
     return baseUrl;
 }
@@ -533,7 +574,6 @@ const channelImageStorage = createChannelImageStorageService({
             Bucket: input.bucket,
             Key: input.key,
             ContentType: input.contentType,
-            ContentLength: input.fileSize,
         });
         return getSignedUrl(getStorageClient(), command, { expiresIn: input.expiresIn });
     },

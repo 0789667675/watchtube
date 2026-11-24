@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, Search, Upload, User } from 'lucide-react';
+import { Menu, Search, Upload } from 'lucide-react';
 import { ApertureLogo } from '../brand/ApertureLogo';
 import { ThemeToggle } from '../theme/ThemeToggle';
+import { AccountControls } from '../account/AccountControls';
 
 interface HeaderProps {
   onMenuClick: () => void;
@@ -116,13 +117,7 @@ export function Header({ onMenuClick, isMenuOpen }: HeaderProps) {
           >
             <Upload className="h-4 w-4" /> Create
           </Link>
-          <Link
-            to="/auth/login"
-            aria-label="Sign in"
-            className="flex h-11 w-11 items-center justify-center rounded-full bg-surface-subtle text-text-muted transition hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
-          >
-            <User className="h-5 w-5" />
-          </Link>
+          <AccountControls />
         </div>
       </div>
 

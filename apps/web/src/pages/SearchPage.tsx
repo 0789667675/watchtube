@@ -34,6 +34,127 @@ interface SearchResponse {
   };
 }
 
+interface SearchContentProps {
+  query: string;
+  page: number;
+  videos: ViewerVideo[];
+  channels: SearchChannel[];
+  hasMore: boolean;
+  error: string | null;
+  isLoading: boolean;
+  onRetry: () => void;
+  onPageChange: (page: number) => void;
+}
+
+export function SearchContent({
+  query,
+  page,
+  videos,
+  channels,
+  hasMore,
+  error,
+  isLoading,
+  onRetry,
+  onPageChange,
+}: SearchContentProps) {
+  return (
+    <section className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8">
+      <h1 className="mb-6 text-2xl font-bold tracking-tight">
+        {query ? <>Search results for <span className="break-words">“{query}”</span></> : 'Search videos and channels'}
+      </h1>
+      {!query ? (
+        <EmptyState title="Enter a search term" message="Use the search field above to find videos and channels." />
+      ) : isLoading ? (
+        <LoadingState label="Searching videos and channels…" layout="grid" />
+      ) : error ? (
+        <ErrorState message={error} onRetry={onRetry} />
+      ) : videos.length === 0 && channels.length === 0 ? (
+        <div className="space-y-4">
+          <EmptyState title="No results found" message={`There are no public videos or channels matching “${query}”.`} />
+          {page > 1 && (
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={() => onPageChange(page - 1)}
+                className="min-h-11 rounded-control border border-border px-4 py-2 text-sm font-semibold"
+              >
+                Previous page
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-10">
+          <section aria-labelledby="search-channels-heading">
+            <h2 id="search-channels-heading" className="mb-4 text-xl font-semibold">Channels and creators</h2>
+            {channels.length === 0 ? (
+              <p className="text-sm text-text-muted">No matching channels or creators on this page.</p>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {channels.map((channel) => (
+                  <Link
+                    key={channel.id}
+                    to={`/channel/${encodeURIComponent(channel.handle)}`}
+                    className="flex min-h-24 min-w-0 items-center gap-4 rounded-card border border-border bg-surface-light p-4 transition hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus dark:bg-surface-dark"
+                  >
+                    {channel.avatarUrl ? (
+                      <img src={channel.avatarUrl} alt="" className="h-14 w-14 shrink-0 rounded-full object-cover" loading="lazy" />
+                    ) : (
+                      <span aria-hidden="true" className="h-14 w-14 shrink-0 rounded-full bg-surface-subtle" />
+                    )}
+                    <span className="min-w-0">
+                      <span className="block truncate font-semibold">
+                        {channel.name}{channel.isVerified && <span className="sr-only">, verified</span>}
+                      </span>
+                      <span className="block truncate text-sm text-text-muted">@{channel.handle}</span>
+                      <span className="block text-xs text-text-muted">
+                        {new Intl.NumberFormat().format(channel.subscriberCount)} subscribers
+                      </span>
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section aria-labelledby="search-videos-heading">
+            <h2 id="search-videos-heading" className="mb-4 text-xl font-semibold">Videos</h2>
+            {videos.length === 0 ? (
+              <p className="text-sm text-text-muted">No matching public videos on this page.</p>
+            ) : (
+              <div className="grid grid-cols-1 gap-x-5 gap-y-8 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                {videos.map((video) => <VideoCard key={video.id} video={video} />)}
+              </div>
+            )}
+          </section>
+
+          <nav aria-label="Search result pages" className="flex items-center justify-center gap-3">
+            {page > 1 && (
+              <button
+                type="button"
+                onClick={() => onPageChange(page - 1)}
+                className="min-h-11 rounded-control border border-border px-4 py-2 text-sm font-semibold"
+              >
+                Previous
+              </button>
+            )}
+            <span className="text-sm text-text-muted">Page {page}</span>
+            {hasMore && (
+              <button
+                type="button"
+                onClick={() => onPageChange(page + 1)}
+                className="min-h-11 rounded-control border border-border px-4 py-2 text-sm font-semibold"
+              >
+                Next
+              </button>
+            )}
+          </nav>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get('q')?.trim() ?? '';
@@ -101,99 +222,16 @@ export function SearchPage() {
   };
 
   return (
-    <section className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8">
-      <h1 className="mb-6 text-2xl font-bold tracking-tight">
-        {query ? <>Search results for <span className="break-words">“{query}”</span></> : 'Search videos and channels'}
-      </h1>
-      {!query ? (
-        <EmptyState title="Enter a search term" message="Use the search field above to find videos and channels." />
-      ) : isLoading ? (
-        <LoadingState label="Searching videos and channels…" layout="grid" />
-      ) : error ? (
-        <ErrorState message={error} onRetry={() => setRequestNumber((number) => number + 1)} />
-      ) : videos.length === 0 && channels.length === 0 ? (
-        <div className="space-y-4">
-          <EmptyState title="No results found" message={`There are no public videos or channels matching “${query}”.`} />
-          {page > 1 && (
-            <div className="text-center">
-              <button
-                type="button"
-                onClick={() => goToPage(page - 1)}
-                className="min-h-11 rounded-control border border-border px-4 py-2 text-sm font-semibold"
-              >
-                Previous page
-              </button>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="space-y-10">
-          <section aria-labelledby="search-channels-heading">
-            <h2 id="search-channels-heading" className="mb-4 text-xl font-semibold">Channels and creators</h2>
-            {channels.length === 0 ? (
-              <p className="text-sm text-text-muted">No matching channels or creators on this page.</p>
-            ) : (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {channels.map((channel) => (
-                  <Link
-                    key={channel.id}
-                    to={`/channel/${encodeURIComponent(channel.handle)}`}
-                    className="flex min-h-24 min-w-0 items-center gap-4 rounded-card border border-border bg-surface-light p-4 transition hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus dark:bg-surface-dark"
-                  >
-                    {channel.avatarUrl ? (
-                      <img src={channel.avatarUrl} alt="" className="h-14 w-14 shrink-0 rounded-full object-cover" loading="lazy" />
-                    ) : (
-                      <span aria-hidden="true" className="h-14 w-14 shrink-0 rounded-full bg-surface-subtle" />
-                    )}
-                    <span className="min-w-0">
-                      <span className="block truncate font-semibold">
-                        {channel.name}{channel.isVerified && <span className="sr-only">, verified</span>}
-                      </span>
-                      <span className="block truncate text-sm text-text-muted">@{channel.handle}</span>
-                      <span className="block text-xs text-text-muted">
-                        {new Intl.NumberFormat().format(channel.subscriberCount)} subscribers
-                      </span>
-                    </span>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section aria-labelledby="search-videos-heading">
-            <h2 id="search-videos-heading" className="mb-4 text-xl font-semibold">Videos</h2>
-            {videos.length === 0 ? (
-              <p className="text-sm text-text-muted">No matching public videos on this page.</p>
-            ) : (
-              <div className="grid grid-cols-1 gap-x-5 gap-y-8 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                {videos.map((video) => <VideoCard key={video.id} video={video} />)}
-              </div>
-            )}
-          </section>
-
-          <nav aria-label="Search result pages" className="flex items-center justify-center gap-3">
-            {page > 1 && (
-              <button
-                type="button"
-                onClick={() => goToPage(page - 1)}
-                className="min-h-11 rounded-control border border-border px-4 py-2 text-sm font-semibold"
-              >
-                Previous
-              </button>
-            )}
-            <span className="text-sm text-text-muted">Page {page}</span>
-            {hasMore && (
-              <button
-                type="button"
-                onClick={() => goToPage(page + 1)}
-                className="min-h-11 rounded-control border border-border px-4 py-2 text-sm font-semibold"
-              >
-                Next
-              </button>
-            )}
-          </nav>
-        </div>
-      )}
-    </section>
+    <SearchContent
+      query={query}
+      page={page}
+      videos={videos}
+      channels={channels}
+      hasMore={hasMore}
+      error={error}
+      isLoading={isLoading}
+      onRetry={() => setRequestNumber((number) => number + 1)}
+      onPageChange={goToPage}
+    />
   );
 }

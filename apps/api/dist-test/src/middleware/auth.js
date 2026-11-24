@@ -3,8 +3,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.authenticate = void 0;
+exports.optionalAuthenticate = exports.authenticate = void 0;
 exports.createAuthenticate = createAuthenticate;
+exports.createOptionalAuthenticate = createOptionalAuthenticate;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const database_1 = require("@watchtube/database");
 const jwt_1 = require("../config/jwt");
@@ -53,7 +54,20 @@ function createAuthenticate(findUser) {
         next();
     };
 }
-exports.authenticate = createAuthenticate(async (id) => database_1.db.user.findUnique({
+function createOptionalAuthenticate(findUser) {
+    const authenticateUser = createAuthenticate(findUser);
+    return (req, res, next) => {
+        const token = req.cookies?.token || req.headers.authorization?.split(' ')[1];
+        if (!token) {
+            next();
+            return;
+        }
+        return authenticateUser(req, res, next);
+    };
+}
+const findAuthenticatedUser = async (id) => database_1.db.user.findUnique({
     where: { id },
     select: { id: true, role: true, status: true },
-}));
+});
+exports.authenticate = createAuthenticate(findAuthenticatedUser);
+exports.optionalAuthenticate = createOptionalAuthenticate(findAuthenticatedUser);

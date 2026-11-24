@@ -1,4 +1,4 @@
-import { Worker, Job, WorkerOptions } from 'bullmq';
+import { Worker, Job, WorkerOptions, UnrecoverableError } from 'bullmq';
 import IORedis from 'ioredis';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -9,8 +9,19 @@ import {
     downloadRawVideo,
     uploadPrivateProcessingFile,
 } from './services/storage.service';
-import { getVideoMetadata, extractPoster, extractThumbnails, createHLSRendition } from './services/transcode.service';
+import { getMediaToolStatus, getVideoMetadata, extractPoster, extractThumbnails, createHLSRendition } from './services/transcode.service';
 import { assertSafeWorkerEndpoints } from './serviceEndpointSafety';
+import {
+    EmailOutboxProcessor,
+    getEmailOutboxService,
+    EmailOutboxService,
+} from './services/email';
+
+export {
+    EmailOutboxProcessor,
+    getEmailOutboxService,
+    EmailOutboxService,
+};
 
 export function createRedisConnection(): IORedis {
     assertSafeWorkerEndpoints({
@@ -30,9 +41,16 @@ export function createRedisConnection(): IORedis {
         });
 }
 
-export function isTerminalAttempt(job: Job): boolean {
-    const attempts = job.opts.attempts ?? 1;
-    return job.attemptsMade + 1 >= attempts;
+export function isTerminalAttempt(job: Job, error?: unknown): boolean {
+    if (error instanceof UnrecoverableError) return true;
+    const attempts = Math.max(1, job.opts.attempts ?? 1);
+    return job.attemptsMade >= attempts;
+}
+
+function getRawInputExtension(contentType: string | null | undefined): string {
+    if (contentType === 'video/webm') return '.webm';
+    if (contentType === 'video/quicktime') return '.mov';
+    return '.mp4';
 }
 
 export function getWorkerOptions(connection: IORedis): WorkerOptions {
@@ -100,6 +118,25 @@ const renditions = [
     { name: '720p', resolution: '1280x720', videoBitrate: '2000k', audioBitrate: '128k', bitrate: 2000000 },
     { name: '1080p', resolution: '1920x1080', videoBitrate: '4500k', audioBitrate: '192k', bitrate: 4500000 },
 ];
+export const shortRenditions = [
+    { name: '360p', resolution: '360x640', videoBitrate: '800k', audioBitrate: '96k', bitrate: 800000 },
+    { name: '540p', resolution: '540x960', videoBitrate: '1800k', audioBitrate: '128k', bitrate: 1800000 },
+    { name: '1080p', resolution: '1080x1920', videoBitrate: '3500k', audioBitrate: '128k', bitrate: 3500000 },
+];
+const MAX_SHORT_DURATION_SECONDS = 180;
+export function validateShortMediaMetadata(duration: number, width: number, height: number): string | null {
+    if (!Number.isFinite(duration) || duration <= 0 || duration > MAX_SHORT_DURATION_SECONDS) {
+        return 'Short duration must be between 1 second and 3 minutes.';
+    }
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        return 'Short video dimensions could not be determined.';
+    }
+    const aspectRatio = width / height;
+    if (aspectRatio < 0.50625 || aspectRatio > 0.61875) {
+        return 'Short video must use a portrait aspect ratio close to 9:16.';
+    }
+    return null;
+}
 
 type VideoReadyTransitionRepository = {
     updateMany: (args: {
@@ -156,7 +193,7 @@ export function createVideoTranscodeProcessor() {
 
         // 1. Validate videoId as a UUID before touching filesystem or database
         if (!videoId || typeof videoId !== 'string' || !UUID_REGEX.test(videoId)) {
-            throw new Error(`Invalid videoId: "${videoId}" is not a valid UUID`);
+            throw new UnrecoverableError(`Invalid videoId: "${videoId}" is not a valid UUID`);
         }
 
         console.log(`Starting job for video: ${videoId}`);
@@ -166,7 +203,7 @@ export function createVideoTranscodeProcessor() {
             include: { channel: { select: { userId: true } } },
         });
         if (!video || video.status !== 'PROCESSING') {
-            throw new Error(`Video ${videoId} is not in PROCESSING state`);
+            throw new UnrecoverableError(`Video ${videoId} is not in PROCESSING state`);
         }
         if (
             typeof rawStorageKey !== 'string' ||
@@ -174,7 +211,7 @@ export function createVideoTranscodeProcessor() {
             video.rawStorageKey !== rawStorageKey ||
             !rawStorageKey.startsWith(`uploads/${video.channel.userId}/`)
         ) {
-            throw new Error(`Raw storage key does not match the video owner for ${videoId}`);
+            throw new UnrecoverableError(`Raw storage key does not match the video owner for ${videoId}`);
         }
 
         let workDir: string | null = null;
@@ -195,21 +232,44 @@ export function createVideoTranscodeProcessor() {
                 throw new Error(`Security violation: allocated workDir "${workDir}" is not contained within base "${TEMP_BASE_DIR}"`);
             }
 
-            const rawVideoPath = path.join(workDir, 'raw.mp4');
+            const rawVideoPath = path.join(workDir, `raw${getRawInputExtension(video.uploadContentType)}`);
 
             console.log(`Downloading raw video from ${rawStorageKey} to ${rawVideoPath}`);
             await downloadRawVideo(rawStorageKey, rawVideoPath);
 
             console.log(`Extracting metadata for ${videoId}`);
-            const metadata = await getVideoMetadata(rawVideoPath);
-            const durationStr = metadata.format.duration;
+            let metadata;
+            try {
+                metadata = await getVideoMetadata(rawVideoPath);
+            } catch {
+                throw new UnrecoverableError(`Uploaded file for ${videoId} is not a readable video container.`);
+            }
+            const videoStream = metadata.streams?.find((item) => item.codec_type === 'video');
+            const durationStr = metadata.format?.duration;
             const duration = durationStr ? parseFloat(durationStr as unknown as string) : 0;
-            await prisma.video.update({ where: { id: videoId }, data: { duration } });
+            if (!videoStream || !Number.isFinite(duration) || duration <= 0) {
+                throw new UnrecoverableError(`Uploaded file for ${videoId} does not contain a valid video stream.`);
+            }
+            const hasAudio = Boolean(metadata.streams?.some((item) => item.codec_type === 'audio'));
+            if (video.isShort) {
+                const width = videoStream.width;
+                const height = videoStream.height;
+                const validationError = validateShortMediaMetadata(duration, width ?? 0, height ?? 0);
+                if (validationError) {
+                    throw new UnrecoverableError(validationError);
+                }
+            }
+            await prisma.video.update({
+                where: { id: videoId },
+                data: { duration },
+                select: { id: true },
+            });
 
+            const posterTimestamp = duration >= 1.5 ? '00:00:01' : '0';
             console.log(`Extracting thumbnails for ${videoId}`);
-            await extractPoster(rawVideoPath, workDir);
+            await extractPoster(rawVideoPath, workDir, video.isShort ? '360x640' : '1280x720', posterTimestamp);
             const timestamps = ['25%', '50%', '75%'];
-            await extractThumbnails(rawVideoPath, workDir, timestamps);
+            await extractThumbnails(rawVideoPath, workDir, timestamps, video.isShort ? '360x640' : '1280x720');
 
             console.log(`Uploading poster...`);
             const posterStorageKey = `processing/${videoId}/poster.jpg`;
@@ -225,15 +285,18 @@ export function createVideoTranscodeProcessor() {
 
             let masterPlaylist = '#EXTM3U\n#EXT-X-VERSION:3\n';
 
-            for (const rendition of renditions) {
+            for (const rendition of video.isShort ? shortRenditions : renditions) {
                 console.log(`Processing rendition ${rendition.name} for ${videoId}`);
                 const renditionFilename = `${rendition.name}.m3u8`;
                 const renditionPath = path.join(workDir, renditionFilename);
 
-                await createHLSRendition(rawVideoPath, renditionPath, rendition);
+                await createHLSRendition(rawVideoPath, renditionPath, rendition, { hasAudio });
 
                 const files = await fs.readdir(workDir);
-                const tsFiles = files.filter(f => f.startsWith(rendition.name) && f.endsWith('.ts'));
+                const tsFiles = files.filter(f => f.startsWith(`${rendition.name}_`) && f.endsWith('.ts'));
+                if (tsFiles.length === 0) {
+                    throw new Error(`FFmpeg produced no HLS segments for rendition ${rendition.name}`);
+                }
 
                 for (const tsFile of tsFiles) {
                     const tsStorageKey = `processing/${videoId}/${tsFile}`;
@@ -241,9 +304,10 @@ export function createVideoTranscodeProcessor() {
                 }
 
                 const playlistStorageKey = `processing/${videoId}/${renditionFilename}`;
+                await uploadPrivateProcessingFile(renditionPath, playlistStorageKey, 'application/vnd.apple.mpegurl');
 
                 await prisma.$transaction(async (transaction) => {
-                    await transaction.$queryRaw`
+                    await transaction.$executeRaw`
                         SELECT pg_advisory_xact_lock(hashtext(${videoId}), hashtext(${rendition.name}))
                     `;
                     const existingVariant = await transaction.videoVariant.findFirst({
@@ -284,18 +348,18 @@ export function createVideoTranscodeProcessor() {
 
         } catch (error) {
             console.error(`Error processing video ${videoId}:`, error);
-            if (isTerminalAttempt(job)) {
+            if (isTerminalAttempt(job, error)) {
                 try {
                     const markedFailed = await markVideoFailedIfProcessing(prisma.video, videoId);
                     if (!markedFailed) {
                         console.warn(`Video ${videoId} left PROCESSING before terminal failure; preserving its current status.`);
                     }
                 } catch (statusError) {
-                    console.error(`Failed to mark video ${videoId} as REJECTED:`, statusError);
+                    console.error(`Failed to mark video ${videoId} as FAILED:`, statusError);
                 }
             } else {
                 console.warn(
-                    `Job for video ${videoId} failed on attempt ${job.attemptsMade + 1}; leaving status PROCESSING for retry`
+                    `Job for video ${videoId} failed on attempt ${Math.max(1, job.attemptsMade)}; leaving status PROCESSING for retry`
                 );
             }
             throw error;
@@ -330,14 +394,52 @@ export function createWorker(connection: IORedis): Worker {
 
 let activeWorker: Worker | null = null;
 let activeRedisConnection: IORedis | null = null;
+let activeEmailProcessor: EmailOutboxProcessor | null = null;
 let shuttingDown = false;
+
+export function getActiveEmailProcessor(): EmailOutboxProcessor | null {
+    return activeEmailProcessor;
+}
+
+export function setActiveEmailProcessor(processor: EmailOutboxProcessor | null): void {
+    activeEmailProcessor = processor;
+}
+
+export function resetWorkerShutdownState(): void {
+    shuttingDown = false;
+}
 
 export async function shutdownWorker(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log('Shutting down worker gracefully...');
-    if (activeWorker) await activeWorker.close();
-    if (activeRedisConnection) await activeRedisConnection.quit();
+
+    if (activeEmailProcessor) {
+        try {
+            await activeEmailProcessor.stop();
+        } catch (error) {
+            console.error('[Worker] Error stopping email outbox processor:', error instanceof Error ? error.message : error);
+        }
+        activeEmailProcessor = null;
+    }
+
+    if (activeWorker) {
+        try {
+            await activeWorker.close();
+        } catch (error) {
+            console.error('[Worker] Error closing video transcode worker:', error instanceof Error ? error.message : error);
+        }
+        activeWorker = null;
+    }
+
+    if (activeRedisConnection) {
+        try {
+            await activeRedisConnection.quit();
+        } catch (error) {
+            console.error('[Worker] Error closing Redis connection:', error instanceof Error ? error.message : error);
+        }
+        activeRedisConnection = null;
+    }
 }
 
 export function startWorker(): void {
@@ -349,6 +451,16 @@ export function startWorker(): void {
     const storageConfiguration = getStorageConfigurationStatus(false);
     if (storageConfiguration.missing.length) {
         console.error(`[Worker] Cloud storage is not fully configured. Missing configuration: ${storageConfiguration.missing.join(', ')}.`);
+        process.exitCode = 1;
+        return;
+    }
+    const mediaTools = getMediaToolStatus();
+    if (!mediaTools.ffmpeg || !mediaTools.ffprobe) {
+        const missing = [
+            ...(!mediaTools.ffmpeg ? ['ffmpeg'] : []),
+            ...(!mediaTools.ffprobe ? ['ffprobe'] : []),
+        ];
+        console.error(`[Worker] Media processing tools are unavailable. Missing commands: ${missing.join(', ')}.`);
         process.exitCode = 1;
         return;
     }
@@ -377,6 +489,17 @@ export function startWorker(): void {
         const code = error.code ? ` (${error.code})` : '';
         console.error(`[Worker] Queue processing is temporarily unavailable${code}.`);
     });
+
+    try {
+        const emailIntervalMs = parseInt(process.env.EMAIL_OUTBOX_INTERVAL_MS || '5000', 10) || 5000;
+        const emailBatchSize = parseInt(process.env.EMAIL_OUTBOX_BATCH_SIZE || '20', 10) || 20;
+        const emailService = getEmailOutboxService();
+        activeEmailProcessor = new EmailOutboxProcessor(emailService, emailIntervalMs, emailBatchSize);
+        activeEmailProcessor.start();
+        console.log(`[Worker] Email outbox processor started (interval: ${emailIntervalMs}ms, batchSize: ${emailBatchSize}).`);
+    } catch (error: unknown) {
+        console.error('[Worker] Failed to start email outbox processor:', error instanceof Error ? error.message : error);
+    }
 
     const shutdown = () => {
         void shutdownWorker().finally(() => process.exit(0));

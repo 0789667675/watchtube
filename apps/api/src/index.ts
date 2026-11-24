@@ -21,10 +21,26 @@ import { createCreatorCommentsRouter } from './routes/creator-comments.route';
 import { walletRouter } from './routes/wallet.route';
 import { trustRouter } from './routes/trust.route';
 import { adminRouter } from './routes/admin.route';
-import { monetizationRouter } from './routes/monetization.route';
+import { invitationPublicRouter } from './routes/invitation-public.route';
+import { createMonetizationRouter } from './routes/monetization.route';
+import { createPaymentsRouter } from './routes/payments.route';
+import { createNotificationRouter } from './routes/notifications.route';
+import {
+  PrismaNotificationRepository,
+  NotificationService,
+  FinancialNotificationConsumer,
+  PlatformEventDispatcher,
+  setNotificationService,
+  setPlatformEventDispatcher,
+} from './services/notifications';
+import { registerFinancialNotificationListener } from './services/finance/financialEvents';
+import { getEmailDispatcher } from './services/email';
 import { createChannelRouter } from './routes/channel.route';
 import { createChannelImageUploadRouter } from './routes/channel-image-upload.route';
-import { authenticate } from './middleware/auth';
+import { authenticate, AuthRequest } from './middleware/auth';
+import { requireAdmin } from './middleware/admin';
+import { requirePermission } from './middleware/rbac';
+import { getPlatformHealthOverview, getOperationalOverview } from './services/ceoDashboard.service';
 import { createVideoUploadRouter } from './routes/video-upload.route';
 import { createCorsMiddleware, parseAllowedOrigins } from './middleware/cors';
 import { Queue } from 'bullmq';
@@ -35,7 +51,7 @@ import { publicVideoWhere } from './security/publicContent';
 import { createPublicVideosHandler } from './routes/feed.route';
 import { createHealthRouter } from './routes/health.route';
 import { getStorageConfigurationStatus } from './services/storage.service';
-import { sendDatabaseErrorResponse } from './config/databaseErrors';
+import { extractDatabaseErrorCode, sendDatabaseErrorResponse } from './config/databaseErrors';
 
 const app = express();
 const localOnly = process.env.WATCHTUBE_LOCAL_ONLY === '1';
@@ -80,10 +96,16 @@ const connection = process.env.REDIS_URL
     });
 const videoQueue = new Queue('video-transcode', { connection });
 const getDatabaseErrorCode = (error: unknown): string => {
-  if (typeof error !== 'object' || error === null) return '';
-  if ('errorCode' in error && typeof error.errorCode === 'string') return ` (${error.errorCode})`;
-  if ('code' in error && typeof error.code === 'string') return ` (${error.code})`;
-  return '';
+  const code = extractDatabaseErrorCode(error);
+  return code ? ` (${code})` : '';
+};
+const verifyDatabaseRuntimeAccess = async (): Promise<void> => {
+  await Promise.all([
+    prisma.video.findFirst({ select: { id: true } }),
+    prisma.user.findFirst({ select: { id: true } }),
+    prisma.adminPosition.findFirst({ select: { positionNumber: true } }),
+    prisma.adminInvitation.findFirst({ select: { id: true } }),
+  ]);
 };
 let redisFailureLogged = false;
 const logRedisUnavailable = (error: NodeJS.ErrnoException) => {
@@ -104,9 +126,9 @@ if (databaseConfigured) {
     .then(async () => {
       console.log('[API] PostgreSQL connection established.');
       try {
-        await prisma.video.findFirst({ select: { id: true } });
+        await verifyDatabaseRuntimeAccess();
       } catch (error) {
-        console.error(`[API] PostgreSQL is reachable, but the WatchTube schema check failed${getDatabaseErrorCode(error)}. Database-backed routes may fail; verify the configured database schema.`);
+        console.error(`[API] PostgreSQL is reachable, but the WatchTube schema/privilege check failed${getDatabaseErrorCode(error)}. Database-backed routes may fail; verify the configured database schema and role grants.`);
       }
     })
     .catch((error: unknown) => {
@@ -123,14 +145,16 @@ const allowedOrigins = parseAllowedOrigins(process.env.API_ALLOWED_ORIGINS, proc
 app.use(createCorsMiddleware(allowedOrigins));
 
 app.use(helmet());
-app.use(express.json());
+app.use(express.json({
+  verify: (req, _res, buf) => {
+    (req as Request & { rawBody?: Buffer }).rawBody = buf;
+  },
+}));
 app.use(cookieParser());
 
 const healthRouter = createHealthRouter({
   databaseConfigured,
-  async checkDatabase() {
-    await prisma.video.findFirst({ select: { id: true } });
-  },
+  checkDatabase: verifyDatabaseRuntimeAccess,
   getRedisStatus: () => connection.status === 'ready' ? 'connected' : 'unavailable',
   getStorageStatus: getStorageConfigurationStatus,
 });
@@ -175,6 +199,7 @@ const channelRouter = createChannelRouter({
             where: {
               status: { in: ['READY', 'PUBLISHED'] },
               visibility: 'PUBLIC',
+              isShort: false,
             },
             orderBy: { createdAt: 'desc' },
             select: {
@@ -210,6 +235,12 @@ const channelRouter = createChannelRouter({
           handle,
           ...(exceptChannelId ? { id: { not: exceptChannelId } } : {}),
         },
+        select: { id: true },
+      }));
+    },
+    async hasUserChannel(userId) {
+      return Boolean(await prisma.channel.findFirst({
+        where: { userId },
         select: { id: true },
       }));
     },
@@ -281,31 +312,45 @@ const videoUploadRouter = createVideoUploadRouter({
     async createDraft(data) {
       return prisma.video.create({ data, select: { id: true } });
     },
-    async updateMetadata({ videoId, userId, metadata }) {
-      const currentVideo = await prisma.video.findFirst({
-        where: { id: videoId, channel: { userId } },
-        select: { copyrightDeclared: true },
+    async updateMetadata({ videoId, userId, metadata, publishedAssets }) {
+      return prisma.$transaction(async (transaction) => {
+        const currentVideo = await transaction.video.findFirst({
+          where: { id: videoId, channel: { userId } },
+          select: { copyrightDeclared: true },
+        });
+        if (!currentVideo) return false;
+        const result = await transaction.video.updateMany({
+          where: { id: videoId, channel: { userId } },
+          data: {
+            isShort: metadata.isShort,
+            title: metadata.title,
+            description: metadata.description,
+            tags: metadata.tags,
+            category: metadata.category,
+            language: metadata.language,
+            madeForKids: metadata.madeForKids,
+            visibility: metadata.visibility,
+            ...(metadata.copyrightDeclared && !currentVideo.copyrightDeclared ? {
+              copyrightDeclared: true,
+              copyrightDeclaredAt: new Date(),
+              copyrightDeclaredById: userId,
+            } : {}),
+            ...(metadata.visibility === 'PRIVATE'
+              ? { thumbnailUrl: null }
+              : publishedAssets ? { thumbnailUrl: publishedAssets.thumbnailUrl } : {}),
+          },
+        });
+        if (result.count !== 1) return false;
+        if (publishedAssets) {
+          for (const [resolution, playlistUrl] of Object.entries(publishedAssets.playlistUrls)) {
+            await transaction.videoVariant.updateMany({
+              where: { videoId, resolution },
+              data: { playlistUrl },
+            });
+          }
+        }
+        return true;
       });
-      if (!currentVideo) return false;
-      const result = await prisma.video.updateMany({
-        where: { id: videoId, channel: { userId } },
-        data: {
-          title: metadata.title,
-          description: metadata.description,
-          tags: metadata.tags,
-          category: metadata.category,
-          language: metadata.language,
-          madeForKids: metadata.madeForKids,
-          visibility: metadata.visibility,
-          ...(metadata.copyrightDeclared && !currentVideo.copyrightDeclared ? {
-            copyrightDeclared: true,
-            copyrightDeclaredAt: new Date(),
-            copyrightDeclaredById: userId,
-          } : {}),
-          ...(metadata.visibility === 'PRIVATE' ? { thumbnailUrl: null } : {}),
-        },
-      });
-      return result.count === 1;
     },
     async setUploadTarget({ videoId, userId, rawStorageKey, contentType, fileSize }) {
       const result = await prisma.video.updateMany({
@@ -422,6 +467,7 @@ const videoUploadRouter = createVideoUploadRouter({
         select: {
           id: true,
           channelId: true,
+          isShort: true,
           title: true,
           status: true,
           visibility: true,
@@ -522,11 +568,50 @@ app.use('/api/v1/analytics', analyticsRouter);
 app.use('/api/v1/feed', feedRouter);
 app.use('/api/v1/studio', studioRouter);
 app.use('/api/v1/studio', creatorCommentsRouter);
+const runtimeMonetizationRouter = createMonetizationRouter({
+  redisClient: connection,
+});
+const runtimePaymentsRouter = createPaymentsRouter();
+
 app.use('/api/v1/wallet', walletRouter);
+app.use('/api/v1/payments', runtimePaymentsRouter);
 app.use('/api/v1', trustRouter);
+app.use('/api/v1/admin/invitations', invitationPublicRouter);
 app.use('/api/v1/admin', adminRouter);
-app.use('/api/v1/monetization', monetizationRouter);
-app.use('/api/v1/admin/monetization', monetizationRouter);
+app.get('/api/v1/platform/health', authenticate, requireAdmin, requirePermission('platform.view_health'), async (_req: AuthRequest, res: Response) => {
+  try {
+    const health = await getPlatformHealthOverview(true);
+    res.status(200).json(health);
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Internal error' });
+  }
+});
+app.get('/api/v1/operational-overview', authenticate, requireAdmin, requirePermission('platform.view_health'), async (_req: AuthRequest, res: Response) => {
+  try {
+    const overview = await getOperationalOverview();
+    res.status(200).json(overview);
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Internal error' });
+  }
+});
+app.use('/api/v1/monetization', runtimeMonetizationRouter);
+app.use('/api/v1/admin/monetization', runtimeMonetizationRouter);
+
+const notificationRepository = new PrismaNotificationRepository(prisma);
+const notificationService = new NotificationService(notificationRepository);
+setNotificationService(notificationService);
+const platformEventDispatcher = new PlatformEventDispatcher(notificationService, getEmailDispatcher());
+setPlatformEventDispatcher(platformEventDispatcher);
+
+const runtimeNotificationRouter = createNotificationRouter({
+  authenticate,
+  notificationService,
+});
+app.use('/api/v1/notifications', runtimeNotificationRouter);
+
+registerFinancialNotificationListener(
+  new FinancialNotificationConsumer(notificationService, getEmailDispatcher())
+);
 
 const server = app.listen({
   port,
@@ -591,21 +676,52 @@ apiRouter.get('/videos', createPublicVideosHandler((query) => prisma.video.findM
 apiRouter.get('/videos/:id', async (req: Request, res: Response) => {
   try {
     const videoId = req.params.id;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(videoId)) {
+      res.status(404).json({ error: 'Video not found or not available' });
+      return;
+    }
 
     const video = await prisma.video.findFirst({
       where: publicVideoWhere(videoId),
-      include: {
+      select: {
+        id: true,
+        channelId: true,
+        isShort: true,
+        title: true,
+        description: true,
+        status: true,
+        visibility: true,
+        tags: true,
+        category: true,
+        language: true,
+        madeForKids: true,
+        duration: true,
+        viewsCount: true,
+        thumbnailUrl: true,
+        lowBandwidthReady: true,
+        createdAt: true,
+        publishedAt: true,
         channel: {
           select: {
+            id: true,
             name: true,
             handle: true,
             avatarUrl: true,
             isVerified: true,
-            subscriberCount: true
-          }
+            subscriberCount: true,
+          },
         },
-        variants: true
-      }
+        variants: {
+          orderBy: { bitrate: 'asc' },
+          select: {
+            id: true,
+            videoId: true,
+            resolution: true,
+            bitrate: true,
+            playlistUrl: true,
+          },
+        },
+      },
     });
 
     if (!video) {

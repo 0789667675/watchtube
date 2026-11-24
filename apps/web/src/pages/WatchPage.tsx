@@ -1,18 +1,29 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import axios from 'axios';
-import { CheckCircle2, Copy, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { CheckCircle2, Copy, Flag, MessageSquare, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import { apiClient, getApiErrorMessage } from '../api/apiClient';
+import { SignInLink } from '../components/account/SignInLink';
+import { ReportModal } from '../components/modals/ReportModal';
 import { VideoPlayer } from '../components/player/VideoPlayer';
 import { VideoCard } from '../components/video/VideoCard';
 import { EmptyState, ErrorState, LoadingState } from '../components/video/ViewerState';
 import { formatPublishedDate, formatViewCount, type ViewerVideo } from '../components/video/videoTypes';
 
-interface ViewerComment {
+export interface ViewerReply {
+  id: string;
+  content: string;
+  createdAt: string;
+  parentId?: string | null;
+  user?: { channels?: { name: string; handle: string; avatarUrl?: string | null }[] };
+}
+
+export interface ViewerComment {
   id: string;
   content: string;
   createdAt: string;
   user?: { channels?: { name: string; handle: string; avatarUrl?: string | null }[] };
+  _count?: { replies: number };
 }
 
 interface CommentsResponse {
@@ -57,7 +68,7 @@ export function WatchPage() {
   const video = videoResultIsCurrent ? videoResult.video ?? null : null;
   const videoError = videoResultIsCurrent ? videoResult.error ?? null : null;
   const isLoadingVideo = !videoResultIsCurrent;
-  const channelId = video?.channel.id;
+  const channelId = video?.channel.id ?? (video as { channelId?: string })?.channelId;
   const [subscriptionResult, setSubscriptionResult] = useState<SubscriptionResult>();
   const subscriptionState = channelId && subscriptionResult?.channelId === channelId
     ? subscriptionResult.state
@@ -77,6 +88,17 @@ export function WatchPage() {
   const [likeState, setLikeState] = useState<'liked' | 'disliked' | 'none'>('none');
   const [likeError, setLikeError] = useState<string | null>(null);
   const [isUpdatingLike, setIsUpdatingLike] = useState(false);
+  const [repliesState, setRepliesState] = useState<Record<string, {
+    replies: ViewerReply[];
+    isLoading: boolean;
+    error: string | null;
+    isExpanded: boolean;
+  }>>({});
+  const [activeReplyCommentId, setActiveReplyCommentId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState('');
+  const [isPostingReply, setIsPostingReply] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const [reportTarget, setReportTarget] = useState<{ id: string; type: 'VIDEO' | 'COMMENT' } | null>(null);
   const playbackSessionRef = useRef('');
   const playbackRef = useRef({ currentTime: 0, durationWatched: 0, completed: false });
   const commentsKey = `${id}:${commentRefresh}`;
@@ -101,6 +123,11 @@ export function WatchPage() {
     setSubscriptionError(null);
     setShareStatus(null);
     setCommentRefresh(0);
+    setRepliesState({});
+    setActiveReplyCommentId(null);
+    setReplyText('');
+    setReplyError(null);
+    setReportTarget(null);
   }, [id]);
 
   useEffect(() => {
@@ -247,22 +274,36 @@ export function WatchPage() {
 
   const toggleSubscription = async () => {
     if (
-      !video?.channel.id ||
+      !channelId ||
       (subscriptionState !== 'subscribed' && subscriptionState !== 'not-subscribed')
     ) return;
     setIsUpdatingSubscription(true);
     setSubscriptionError(null);
     try {
       const { data } = await apiClient.post<{ isSubscribed: boolean }>(
-        `/api/v1/channels/${video.channel.id}/subscribe`,
+        `/api/v1/channels/${channelId}/subscribe`,
       );
       setSubscriptionResult({
-        channelId: video.channel.id,
+        channelId,
         state: data.isSubscribed ? 'subscribed' : 'not-subscribed',
+      });
+      setVideoResult((current) => {
+        if (current?.id !== id || !current.video) return current;
+        const currentCount = current.video.channel.subscriberCount ?? 0;
+        return {
+          ...current,
+          video: {
+            ...current.video,
+            channel: {
+              ...current.video.channel,
+              subscriberCount: Math.max(0, currentCount + (data.isSubscribed ? 1 : -1)),
+            },
+          },
+        };
       });
     } catch (requestError) {
       if (axios.isAxiosError(requestError) && requestError.response?.status === 401) {
-        setSubscriptionResult({ channelId: video.channel.id, state: 'signed-out' });
+        setSubscriptionResult({ channelId, state: 'signed-out' });
       } else {
         setSubscriptionError(getApiErrorMessage(requestError, 'Your subscription could not be updated.'));
       }
@@ -275,6 +316,13 @@ export function WatchPage() {
     if (isUpdatingLike) return;
     setLikeError(null);
     setIsUpdatingLike(true);
+    const previousState = likeState;
+    const targetState: 'liked' | 'disliked' | 'none' =
+      !isDislike
+        ? likeState === 'liked' ? 'none' : 'liked'
+        : likeState === 'disliked' ? 'none' : 'disliked';
+    setLikeState(targetState);
+
     try {
       const { data } = await apiClient.post<{ isLiked: boolean; isDisliked: boolean }>(
         `/api/v1/videos/${encodeURIComponent(id)}/like`,
@@ -282,6 +330,7 @@ export function WatchPage() {
       );
       setLikeState(data.isLiked ? 'liked' : data.isDisliked ? 'disliked' : 'none');
     } catch (requestError) {
+      setLikeState(previousState);
       if (axios.isAxiosError(requestError) && requestError.response?.status === 401) {
         setLikeError('Sign in to like or dislike this video.');
       } else {
@@ -289,6 +338,108 @@ export function WatchPage() {
       }
     } finally {
       setIsUpdatingLike(false);
+    }
+  };
+
+  const loadReplies = async (commentId: string) => {
+    setRepliesState((prev) => ({
+      ...prev,
+      [commentId]: {
+        replies: prev[commentId]?.replies ?? [],
+        isLoading: true,
+        error: null,
+        isExpanded: true,
+      },
+    }));
+    try {
+      const { data } = await apiClient.get<ViewerReply[]>(
+        `/api/v1/comments/${encodeURIComponent(commentId)}/replies`,
+      );
+      setRepliesState((prev) => ({
+        ...prev,
+        [commentId]: {
+          replies: data,
+          isLoading: false,
+          error: null,
+          isExpanded: true,
+        },
+      }));
+    } catch (err) {
+      setRepliesState((prev) => ({
+        ...prev,
+        [commentId]: {
+          replies: prev[commentId]?.replies ?? [],
+          isLoading: false,
+          error: getApiErrorMessage(err, 'Replies could not be loaded.'),
+          isExpanded: true,
+        },
+      }));
+    }
+  };
+
+  const toggleReplies = (commentId: string) => {
+    const current = repliesState[commentId];
+    if (current?.isExpanded) {
+      setRepliesState((prev) => ({
+        ...prev,
+        [commentId]: { ...prev[commentId], isExpanded: false },
+      }));
+    } else {
+      if (!current?.replies || current.replies.length === 0) {
+        void loadReplies(commentId);
+      } else {
+        setRepliesState((prev) => ({
+          ...prev,
+          [commentId]: { ...prev[commentId], isExpanded: true },
+        }));
+      }
+    }
+  };
+
+  const submitReply = async (commentId: string, event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const content = replyText.trim();
+    if (!content || isPostingReply) return;
+    setIsPostingReply(true);
+    setReplyError(null);
+    try {
+      const { data: newReply } = await apiClient.post<ViewerReply>(
+        `/api/v1/videos/${encodeURIComponent(id)}/comments`,
+        { content, parentId: commentId },
+      );
+      setReplyText('');
+      setActiveReplyCommentId(null);
+      setRepliesState((prev) => {
+        const existing = prev[commentId]?.replies ?? [];
+        return {
+          ...prev,
+          [commentId]: {
+            replies: [...existing, newReply],
+            isLoading: false,
+            error: null,
+            isExpanded: true,
+          },
+        };
+      });
+      setCommentsResult((current) => {
+        if (!current || current.key !== commentsKey) return current;
+        return {
+          ...current,
+          comments: current.comments.map((c) =>
+            c.id === commentId
+              ? { ...c, _count: { replies: (c._count?.replies ?? 0) + 1 } }
+              : c,
+          ),
+        };
+      });
+    } catch (requestError) {
+      if (axios.isAxiosError(requestError) && requestError.response?.status === 401) {
+        setReplyError('Sign in to post a reply.');
+      } else {
+        setReplyError(getApiErrorMessage(requestError, 'Your reply could not be posted.'));
+      }
+    } finally {
+      setIsPostingReply(false);
     }
   };
 
@@ -375,6 +526,8 @@ export function WatchPage() {
             <VideoPlayer
               src={playlistUrl}
               initialPosition={initialPosition}
+              videoId={video.id}
+              viewerSessionId={playbackSessionRef.current}
               onProgress={(currentTime, duration, completed) => {
                 playbackRef.current.currentTime = currentTime;
                 playbackRef.current.durationWatched = Math.max(
@@ -409,12 +562,17 @@ export function WatchPage() {
                   <span className="truncate">{video.channel.name}</span>
                   {video.channel.isVerified && <CheckCircle2 aria-label="Verified channel" className="h-4 w-4 shrink-0 text-brand-dark" />}
                 </Link>
-                <p className="text-sm text-text-muted">{video.channel.handle}</p>
+                <p className="text-sm text-text-muted">
+                  {video.channel.handle}
+                  {video.channel.subscriberCount != null && (
+                    <> · {new Intl.NumberFormat().format(video.channel.subscriberCount)} subscribers</>
+                  )}
+                </p>
               </div>
               {subscriptionState === 'signed-out' ? (
-                <Link to="/auth/login" className="ml-1 shrink-0 rounded-full bg-brand-action px-4 py-2 text-sm font-semibold text-brand-foreground hover:bg-brand-action-hover">
+                <SignInLink className="ml-1 shrink-0 rounded-full bg-brand-action px-4 py-2 text-sm font-semibold text-brand-foreground hover:bg-brand-action-hover">
                   Sign in to subscribe
-                </Link>
+                </SignInLink>
               ) : (
                 <button
                   type="button"
@@ -459,9 +617,16 @@ export function WatchPage() {
               <button
                 type="button"
                 onClick={copyVideoLink}
-                className="inline-flex items-center gap-2 rounded-full bg-surface-subtle px-4 py-2 text-sm font-medium hover:bg-surface-hover"
+                className="inline-flex min-h-11 items-center gap-2 rounded-full bg-surface-subtle px-4 py-2 text-sm font-medium hover:bg-surface-hover"
               >
                 <Copy className="h-4 w-4" /> Share
+              </button>
+              <button
+                type="button"
+                onClick={() => setReportTarget({ id: video.id, type: 'VIDEO' })}
+                className="inline-flex min-h-11 items-center gap-2 rounded-full bg-surface-subtle px-4 py-2 text-sm font-medium hover:bg-surface-hover"
+              >
+                <Flag className="h-4 w-4" /> Report
               </button>
             </div>
           </div>
@@ -535,7 +700,7 @@ export function WatchPage() {
           {commentError && (
             <p role="alert" className="mt-2 text-sm text-status-warning">
               {commentError === 'Sign in to post a comment.' ? (
-                <><Link to="/auth/login" className="font-semibold underline">Sign in</Link> to post a comment.</>
+                <><SignInLink className="font-semibold underline">Sign in</SignInLink> to post a comment.</>
               ) : commentError}
             </p>
           )}
@@ -552,21 +717,170 @@ export function WatchPage() {
           <div className="space-y-6">
             {comments.map((comment) => {
               const commentChannel = comment.user?.channels?.[0];
+              const repliesInfo = repliesState[comment.id];
+              const hasReplies = (comment._count?.replies != null && comment._count.replies > 0)
+                || (repliesInfo?.replies && repliesInfo.replies.length > 0);
+              const totalReplyCount = Math.max(
+                comment._count?.replies ?? 0,
+                repliesInfo?.replies?.length ?? 0,
+              );
+              const isReplying = activeReplyCommentId === comment.id;
+
               return (
                 <article key={comment.id} className="flex gap-3">
                   <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-surface-subtle">
-                    {commentChannel?.avatarUrl && (
+                    {commentChannel?.avatarUrl ? (
                       <img src={commentChannel.avatarUrl} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <span className="flex h-full w-full items-center justify-center font-semibold text-text-muted">
+                        {commentChannel?.name ? commentChannel.name.slice(0, 1).toUpperCase() : 'M'}
+                      </span>
                     )}
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold">
-                      {commentChannel?.handle ?? 'Member'}
-                      <time className="ml-2 font-normal text-text-muted">
-                        {new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(comment.createdAt))}
-                      </time>
-                    </p>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold">
+                        {commentChannel?.handle ?? 'Member'}
+                        <time className="ml-2 font-normal text-text-muted">
+                          {new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(comment.createdAt))}
+                        </time>
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setReportTarget({ id: comment.id, type: 'COMMENT' })}
+                        className="text-xs text-text-muted hover:text-text-primary"
+                      >
+                        Report
+                      </button>
+                    </div>
                     <p className="mt-1 whitespace-pre-wrap text-sm">{comment.content}</p>
+
+                    <div className="mt-2 flex items-center gap-4 text-xs font-semibold text-text-muted">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveReplyCommentId(isReplying ? null : comment.id);
+                          setReplyText('');
+                          setReplyError(null);
+                        }}
+                        className="hover:text-text-primary"
+                      >
+                        {isReplying ? 'Cancel' : 'Reply'}
+                      </button>
+                      {hasReplies && (
+                        <button
+                          type="button"
+                          onClick={() => toggleReplies(comment.id)}
+                          className="inline-flex items-center gap-1 text-brand-dark hover:underline"
+                        >
+                          <MessageSquare className="h-3.5 w-3.5" />
+                          {repliesInfo?.isExpanded
+                            ? 'Hide replies'
+                            : `View ${totalReplyCount} ${totalReplyCount === 1 ? 'reply' : 'replies'}`}
+                        </button>
+                      )}
+                    </div>
+
+                    {isReplying && (
+                      <form onSubmit={(e) => void submitReply(comment.id, e)} className="mt-3 border-l-2 border-border pl-4">
+                        <label htmlFor={`reply-${comment.id}`} className="sr-only">Add a reply</label>
+                        <textarea
+                          id={`reply-${comment.id}`}
+                          value={replyText}
+                          onChange={(e) => setReplyText(e.target.value)}
+                          placeholder="Add a reply…"
+                          maxLength={1000}
+                          rows={2}
+                          className="w-full resize-y border-b border-divider bg-transparent py-1.5 text-sm focus:border-focus focus:outline-none"
+                        />
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          <span className="text-xs text-text-muted">{replyText.length}/1000</span>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveReplyCommentId(null);
+                                setReplyText('');
+                                setReplyError(null);
+                              }}
+                              className="rounded-full px-3 py-1.5 text-xs font-semibold hover:bg-surface-hover"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="submit"
+                              disabled={!replyText.trim() || isPostingReply}
+                              className="rounded-full bg-brand-action px-3 py-1.5 text-xs font-semibold text-brand-foreground hover:bg-brand-action-hover disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {isPostingReply ? 'Replying…' : 'Reply'}
+                            </button>
+                          </div>
+                        </div>
+                        {replyError && (
+                          <p role="alert" className="mt-1 text-xs text-status-warning">
+                            {replyError === 'Sign in to post a reply.' ? (
+                              <><SignInLink className="font-semibold underline">Sign in</SignInLink> to post a reply.</>
+                            ) : replyError}
+                          </p>
+                        )}
+                      </form>
+                    )}
+
+                    {repliesInfo?.isExpanded && (
+                      <div className="mt-3 space-y-3 border-l-2 border-border pl-4">
+                        {repliesInfo.isLoading ? (
+                          <p className="text-xs text-text-muted">Loading replies…</p>
+                        ) : repliesInfo.error ? (
+                          <div className="text-xs text-status-warning">
+                            <span>{repliesInfo.error}</span>
+                            <button
+                              type="button"
+                              onClick={() => void loadReplies(comment.id)}
+                              className="ml-2 font-semibold underline text-brand-dark"
+                            >
+                              Retry
+                            </button>
+                          </div>
+                        ) : repliesInfo.replies.length === 0 ? (
+                          <p className="text-xs text-text-muted">No replies yet.</p>
+                        ) : (
+                          repliesInfo.replies.map((reply) => {
+                            const replyChannel = reply.user?.channels?.[0];
+                            return (
+                              <article key={reply.id} className="flex gap-2.5">
+                                <div className="h-8 w-8 shrink-0 overflow-hidden rounded-full bg-surface-subtle">
+                                  {replyChannel?.avatarUrl ? (
+                                    <img src={replyChannel.avatarUrl} alt="" className="h-full w-full object-cover" />
+                                  ) : (
+                                    <span className="flex h-full w-full items-center justify-center text-xs font-semibold text-text-muted">
+                                      {replyChannel?.name ? replyChannel.name.slice(0, 1).toUpperCase() : 'M'}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="text-xs font-semibold">
+                                      {replyChannel?.handle ?? 'Member'}
+                                      <time className="ml-2 font-normal text-text-muted">
+                                        {new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(reply.createdAt))}
+                                      </time>
+                                    </p>
+                                    <button
+                                      type="button"
+                                      onClick={() => setReportTarget({ id: reply.id, type: 'COMMENT' })}
+                                      className="text-xs text-text-muted hover:text-text-primary"
+                                    >
+                                      Report
+                                    </button>
+                                  </div>
+                                  <p className="mt-0.5 whitespace-pre-wrap text-xs">{reply.content}</p>
+                                </div>
+                              </article>
+                            );
+                          })
+                        )}
+                      </div>
+                    )}
                   </div>
                 </article>
               );
@@ -587,6 +901,15 @@ export function WatchPage() {
           </div>
         )}
       </section>
+
+      {reportTarget && (
+        <ReportModal
+          isOpen={Boolean(reportTarget)}
+          onClose={() => setReportTarget(null)}
+          targetId={reportTarget.id}
+          targetType={reportTarget.type}
+        />
+      )}
     </div>
   );
 }

@@ -51,6 +51,28 @@ function createSubscriptionFeedRouter(authenticateMiddleware, repository = {
     });
     return router;
 }
+interactionRouter.get('/videos/:id/like-status', auth_1.authenticate, async (req, res) => {
+    try {
+        const videoId = req.params.id;
+        const video = await database_1.db.video.findFirst({
+            where: (0, publicContent_2.publicVideoWhere)(videoId),
+            select: { id: true },
+        });
+        if (!video)
+            return res.status(404).json({ error: 'Video not found or not available' });
+        const like = await database_1.db.videoLike.findUnique({
+            where: { userId_videoId: { userId: req.user.id, videoId } },
+            select: { isDislike: true },
+        });
+        res.status(200).json({
+            isLiked: like ? !like.isDislike : false,
+            isDisliked: like?.isDislike ?? false,
+        });
+    }
+    catch (error) {
+        (0, databaseErrors_1.sendDatabaseErrorResponse)(res, error, 'Video reaction status is temporarily unavailable.');
+    }
+});
 interactionRouter.post('/videos/:id/like', auth_1.authenticate, async (req, res) => {
     try {
         const videoId = req.params.id;
@@ -59,28 +81,6 @@ interactionRouter.post('/videos/:id/like', auth_1.authenticate, async (req, res)
         const video = await database_1.db.video.findFirst({
             where: (0, publicContent_2.publicVideoWhere)(videoId),
             select: { id: true },
-        });
-        interactionRouter.get('/videos/:id/like-status', auth_1.authenticate, async (req, res) => {
-            try {
-                const videoId = req.params.id;
-                const video = await database_1.db.video.findFirst({
-                    where: (0, publicContent_2.publicVideoWhere)(videoId),
-                    select: { id: true },
-                });
-                if (!video)
-                    return res.status(404).json({ error: 'Video not found or not available' });
-                const like = await database_1.db.videoLike.findUnique({
-                    where: { userId_videoId: { userId: req.user.id, videoId } },
-                    select: { isDislike: true },
-                });
-                res.status(200).json({
-                    isLiked: like ? !like.isDislike : false,
-                    isDisliked: like?.isDislike ?? false,
-                });
-            }
-            catch (error) {
-                (0, databaseErrors_1.sendDatabaseErrorResponse)(res, error, 'Video reaction status is temporarily unavailable.');
-            }
         });
         if (!video)
             return res.status(404).json({ error: 'Video not found or not available' });

@@ -1,8 +1,11 @@
+import crypto from 'node:crypto';
 import express, { Request, Response } from 'express';
 import { z } from 'zod';
 import { db as prisma } from '@watchtube/database';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { sendDatabaseErrorResponse } from '../config/databaseErrors';
+import { encryptWtppPii, WtppPiiConfigurationError } from '../security/wtppPii';
+import { emitPlatformEvent } from '../services/notifications';
 
 const trustRouter = express.Router();
 
@@ -72,8 +75,8 @@ export function createWtppApplicationRouter(
   router.post('/wtpp/apply', authenticate, async (req: AuthRequest, res: Response) => {
     const applySchema = z.object({
       channelId: z.string().uuid().optional(),
-      taxId: z.string().optional(),
-      nationalIdOrPassport: z.string().optional(),
+      taxId: z.string().max(256).optional(),
+      nationalIdOrPassport: z.string().max(256).optional(),
     }).strict();
     const parsed = applySchema.safeParse(req.body);
     if (!parsed.success) {
@@ -82,7 +85,13 @@ export function createWtppApplicationRouter(
     }
 
     try {
-      const { channelId, ...applicationDetails } = parsed.data;
+      const { channelId, taxId, nationalIdOrPassport } = parsed.data;
+      const applicationDetails = {
+        ...(taxId === undefined ? {} : { taxId: encryptWtppPii(taxId, 'taxId') }),
+        ...(nationalIdOrPassport === undefined
+          ? {}
+          : { nationalIdOrPassport: encryptWtppPii(nationalIdOrPassport, 'nationalIdOrPassport') }),
+      };
       const channel = await repository.findCreatorChannel(req.user!.id, channelId);
       if (!channel) return res.status(404).json({ error: 'Channel not found' });
 
@@ -97,10 +106,24 @@ export function createWtppApplicationRouter(
         return res.status(409).json({ error: 'Application already in progress or approved' });
       }
 
+      void emitPlatformEvent({
+        eventId: crypto.randomUUID(),
+        eventType: 'WTPP_APPLICATION_RECEIVED',
+        userId: req.user!.id,
+        channelId: channel.id,
+        channelName: channel.name,
+        applicationId: (application as any).id || channel.id,
+        timestamp: new Date(),
+      });
+
       res.status(201).json(application);
     } catch (error) {
       if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002') {
         res.status(409).json({ error: 'Application already in progress or approved' });
+        return;
+      }
+      if (error instanceof WtppPiiConfigurationError) {
+        res.status(503).json({ error: 'Sensitive identity encryption is not configured.' });
         return;
       }
       sendDatabaseErrorResponse(res, error, 'Creator program application is temporarily unavailable because the database is unavailable.');

@@ -8,7 +8,7 @@
     "dev:web": "node scripts/dev-local.cjs",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/tests/videoUploadWorkflow.test.js dist-test/tests/channelImageUpload.test.js dist-test/tests/studioApi.test.js tests/viteProxy.integration.test.mjs tests/communityFeedback.test.mjs tests/apiAvailability.test.mjs tests/viewerState.test.mjs",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/tests/videoUploadWorkflow.test.js dist-test/tests/channelImageUpload.test.js dist-test/tests/studioApi.test.js tests/viteProxy.integration.test.mjs tests/communityFeedback.test.mjs tests/apiAvailability.test.mjs tests/viewerState.test.mjs tests/discoveryPages.test.mjs tests/authSession.test.mjs tests/adminPortal.test.mjs tests/viewerPlayback.test.mjs tests/creatorStudioUpload.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import axios from 'axios';
 import { Link, useOutletContext } from 'react-router-dom';
-import { Clock3, Eye, Users, Wallet } from 'lucide-react';
+import { Clock3, Eye, Users } from 'lucide-react';
 import { apiClient, getApiErrorMessage } from '../../api/apiClient';
 import { isStudioAnalytics } from './studioApi';
 import type { StudioAnalytics, StudioOutletContext } from './studioApi';
@@ -186,15 +186,10 @@ export function DashboardPage() {
         </button>
       </form>
 
-      <section aria-label="Channel metrics" className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-4">
+      <section aria-label="Channel metrics" className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <MetricCard label="Subscribers" value={new Intl.NumberFormat().format(analytics.subscriberCount)} icon={<Users className="h-5 w-5" />} />
         <MetricCard label="Views in period" value={new Intl.NumberFormat().format(analytics.totalViews)} icon={<Eye className="h-5 w-5" />} />
         <MetricCard label="Watch time in period" value={`${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(analytics.totalWatchHours)} hrs`} icon={<Clock3 className="h-5 w-5" />} />
-        <article className="flex min-h-36 flex-col justify-between rounded-card border border-border bg-surface-light p-5 dark:bg-surface-dark">
-          <div className="flex items-center gap-2 text-sm font-medium text-text-muted"><Wallet className="h-5 w-5" /> Earnings and payouts</div>
-          <p className="text-sm font-semibold">Unavailable</p>
-          <p className="text-xs text-text-muted">No verified ad allocations or payment integration are configured.</p>
-        </article>
       </section>
 
       <section className="min-w-0 overflow-hidden rounded-card border border-border bg-surface-light dark:bg-surface-dark">

@@ -31,6 +31,7 @@ export interface ChannelRepository {
   findPublicChannel(handle: string): Promise<unknown | null>;
   findOwnedChannel(channelId: string, userId: string): Promise<ChannelSettings | null>;
   handleExists(handle: string, exceptChannelId?: string): Promise<boolean>;
+  hasUserChannel?(userId: string): Promise<boolean>;
   updateOwnedChannel(
     channelId: string,
     userId: string,
@@ -102,6 +103,10 @@ export function createChannelRouter(dependencies: ChannelRouteDependencies): Rou
     }
 
     try {
+      if (typeof dependencies.repository.hasUserChannel === 'function' && await dependencies.repository.hasUserChannel(userId)) {
+        res.status(409).json({ error: 'Each account may only have one channel.' });
+        return;
+      }
       if (await dependencies.repository.handleExists(parsed.data.handle)) {
         res.status(409).json({ error: 'Handle already in use.' });
         return;
@@ -113,6 +118,14 @@ export function createChannelRouter(dependencies: ChannelRouteDependencies): Rou
       res.status(201).json(channel);
     } catch (error) {
       if (isUniqueConstraintError(error)) {
+        const metaTarget = (error as any)?.meta?.target;
+        if (
+          (Array.isArray(metaTarget) && metaTarget.includes('userId')) ||
+          (typeof metaTarget === 'string' && metaTarget.includes('userId'))
+        ) {
+          res.status(409).json({ error: 'Each account may only have one channel.' });
+          return;
+        }
         res.status(409).json({ error: 'Handle already in use.' });
         return;
       }

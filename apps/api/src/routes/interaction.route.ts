@@ -59,6 +59,27 @@ export function createSubscriptionFeedRouter(
   return router;
 }
 
+interactionRouter.get('/videos/:id/like-status', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const videoId = req.params.id;
+    const video = await prisma.video.findFirst({
+      where: publicVideoWhere(videoId),
+      select: { id: true },
+    });
+    if (!video) return res.status(404).json({ error: 'Video not found or not available' });
+    const like = await prisma.videoLike.findUnique({
+      where: { userId_videoId: { userId: req.user!.id, videoId } },
+      select: { isDislike: true },
+    });
+    res.status(200).json({
+      isLiked: like ? !like.isDislike : false,
+      isDisliked: like?.isDislike ?? false,
+    });
+  } catch (error) {
+    sendDatabaseErrorResponse(res, error, 'Video reaction status is temporarily unavailable.');
+  }
+});
+
 interactionRouter.post('/videos/:id/like', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const videoId = req.params.id;
@@ -67,27 +88,6 @@ interactionRouter.post('/videos/:id/like', authenticate, async (req: AuthRequest
     const video = await prisma.video.findFirst({
       where: publicVideoWhere(videoId),
       select: { id: true },
-    });
-
-    interactionRouter.get('/videos/:id/like-status', authenticate, async (req: AuthRequest, res: Response) => {
-      try {
-        const videoId = req.params.id;
-        const video = await prisma.video.findFirst({
-          where: publicVideoWhere(videoId),
-          select: { id: true },
-        });
-        if (!video) return res.status(404).json({ error: 'Video not found or not available' });
-        const like = await prisma.videoLike.findUnique({
-          where: { userId_videoId: { userId: req.user!.id, videoId } },
-          select: { isDislike: true },
-        });
-        res.status(200).json({
-          isLiked: like ? !like.isDislike : false,
-          isDisliked: like?.isDislike ?? false,
-        });
-      } catch (error) {
-        sendDatabaseErrorResponse(res, error, 'Video reaction status is temporarily unavailable.');
-      }
     });
     if (!video) return res.status(404).json({ error: 'Video not found or not available' });
 

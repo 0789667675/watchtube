@@ -15,12 +15,16 @@ let activeServers: Server[] = [];
 function createRepository() {
   let status: 'PENDING' | 'APPROVED' | 'REJECTED' = 'PENDING';
   let reviewerNotes: string | null = null;
+  const reviewedAt = null;
   const repository: WtppReviewRepository = {
     async reviewPendingApplication(input) {
       if (status !== 'PENDING') return null;
       status = input.status;
       reviewerNotes = input.reviewerNotes;
-      return { id: input.applicationId, status, reviewerNotes };
+      return Object.assign(
+        { id: input.applicationId, status, reviewerNotes, reviewedAt },
+        { taxId: 'private-tax-id', nationalIdOrPassport: 'private-identity-document' },
+      );
     },
   };
   return { repository, getStatus: () => status };
@@ -102,6 +106,7 @@ test('rejection requires a reason and only pending applications can be reviewed'
     id: APPLICATION_ID,
     status: 'REJECTED',
     reviewerNotes: 'Please verify channel ownership.',
+    reviewedAt: null,
   });
 
   const repeatedReview = await fetch(path, {

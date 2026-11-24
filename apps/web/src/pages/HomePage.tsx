@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Search, TrendingUp, Video } from 'lucide-react';
+import { Search, Sparkles, TrendingUp, Video } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { apiClient, getApiErrorMessage } from '../api/apiClient';
 import { VideoCard } from '../components/video/VideoCard';
@@ -44,6 +44,9 @@ export function HomePage() {
           <p className="mt-1 text-text-muted">Explore the latest videos from WatchTube creators.</p>
         </div>
         <nav aria-label="Explore WatchTube" className="flex flex-wrap gap-2">
+          <Link to="/feed/for-you" className="inline-flex min-h-11 items-center gap-2 rounded-full border border-border bg-surface-light px-4 text-sm font-medium transition hover:bg-surface-hover dark:bg-surface-dark">
+            <Sparkles aria-hidden="true" className="h-4 w-4" /> For You
+          </Link>
           <Link to="/feed/trending" className="inline-flex min-h-11 items-center gap-2 rounded-full border border-border bg-surface-light px-4 text-sm font-medium transition hover:bg-surface-hover dark:bg-surface-dark">
             <TrendingUp aria-hidden="true" className="h-4 w-4" /> Trending
           </Link>

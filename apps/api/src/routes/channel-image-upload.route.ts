@@ -7,6 +7,7 @@ import {
   ChannelImagePurpose,
   InvalidChannelImageError,
 } from '../services/channel-image.service';
+import { StorageUnavailableError } from '../services/storage.service';
 import { sendDatabaseErrorResponse } from '../config/databaseErrors';
 
 interface AuthenticatedRequest extends Request {
@@ -90,8 +91,12 @@ function sendRepositoryError(res: Response, error: unknown): void {
   );
 }
 
-function sendStorageError(res: Response): void {
+function sendStorageError(res: Response, error: unknown): void {
   console.error('Channel image storage operation failed.');
+  if (error instanceof StorageUnavailableError) {
+    res.status(503).json({ error: error.message });
+    return;
+  }
   res.status(503).json({ error: 'Channel image upload is temporarily unavailable.' });
 }
 
@@ -164,7 +169,7 @@ export function createChannelImageUploadRouter(
           res.status(400).json({ error: error.message });
           return;
         }
-        sendStorageError(res);
+        sendStorageError(res, error);
         return;
       }
 
@@ -241,7 +246,7 @@ export function createChannelImageUploadRouter(
           res.status(400).json({ error: error.message });
           return;
         }
-        sendStorageError(res);
+        sendStorageError(res, error);
         return;
       }
 

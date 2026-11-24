@@ -32,12 +32,20 @@ function createWtppReviewRouter(repository) {
                 applicationId: applicationId.data,
                 status: decision.data.status,
                 reviewerNotes: decision.data.reviewerNotes || null,
+                reviewerId: req.user?.id,
+                reviewerRole: req.user?.role,
+                req,
             });
             if (!application) {
                 res.status(409).json({ error: 'Only pending applications can be reviewed.' });
                 return;
             }
-            res.status(200).json(application);
+            res.status(200).json({
+                id: application.id,
+                status: application.status,
+                reviewerNotes: application.reviewerNotes,
+                reviewedAt: application.reviewedAt,
+            });
         }
         catch (error) {
             console.error('WTPP application review failed.', {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer, Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import express, { Request } from 'express';
+import cookieParser from 'cookie-parser';
 import jwt from 'jsonwebtoken';
 import { afterEach, test } from 'node:test';
 import { AuthenticatedUser, AuthRequest, createAuthenticate } from '../src/middleware/auth';
@@ -13,6 +14,7 @@ let activeServers: Server[] = [];
 
 async function startServer(findUser: (id: string) => Promise<AuthenticatedUser | null>) {
   const app = express();
+  app.use(cookieParser());
   app.get('/protected', createAuthenticate(findUser), (req: Request, res) => {
     res.status(200).json((req as AuthRequest).user);
   });
@@ -27,6 +29,12 @@ async function startServer(findUser: (id: string) => Promise<AuthenticatedUser |
 async function getProtected(baseUrl: string) {
   return fetch(`${baseUrl}/protected`, {
     headers: { authorization: `Bearer ${token}` },
+  });
+}
+
+async function getProtectedWithCookie(baseUrl: string, value: string) {
+  return fetch(`${baseUrl}/protected`, {
+    headers: { cookie: `token=${value}` },
   });
 }
 
@@ -62,6 +70,33 @@ test('authentication rejects tokens for users that no longer exist', async () =>
   const baseUrl = await startServer(async () => null);
   const response = await getProtected(baseUrl);
   assert.equal(response.status, 401);
+});
+
+test('authentication restores an account from the session cookie', async () => {
+  const sessionToken = jwt.sign({ id: USER_ID }, JWT_SECRET, { expiresIn: '1h' });
+  let lookedUpUserId = '';
+  const baseUrl = await startServer(async (id) => {
+    lookedUpUserId = id;
+    return { id, role: 'VIEWER', status: 'GOOD_STANDING' };
+  });
+
+  const response = await getProtectedWithCookie(baseUrl, sessionToken);
+  assert.equal(response.status, 200);
+  assert.equal(lookedUpUserId, USER_ID);
+  assert.deepEqual(await response.json(), { id: USER_ID, role: 'VIEWER' });
+});
+
+test('authentication rejects an expired session cookie', async () => {
+  const expiredToken = jwt.sign({ id: USER_ID }, JWT_SECRET, { expiresIn: -1 });
+  let lookedUpUser = false;
+  const baseUrl = await startServer(async () => {
+    lookedUpUser = true;
+    return { id: USER_ID, role: 'VIEWER', status: 'GOOD_STANDING' };
+  });
+
+  const response = await getProtectedWithCookie(baseUrl, expiredToken);
+  assert.equal(response.status, 401);
+  assert.equal(lookedUpUser, false);
 });
 
 test('authentication reports database lookup failures instead of accepting stale claims', async () => {

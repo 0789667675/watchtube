@@ -9,6 +9,7 @@ const express_1 = __importDefault(require("express"));
 const node_test_1 = require("node:test");
 const cors_1 = require("../src/middleware/cors");
 const video_upload_route_1 = require("../src/routes/video-upload.route");
+const storage_service_1 = require("../src/services/storage.service");
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const OTHER_USER_ID = '22222222-2222-4222-8222-222222222222';
 const CHANNEL_ID = '33333333-3333-4333-8333-333333333333';
@@ -24,10 +25,17 @@ const VALID_METADATA = {
     visibility: 'UNLISTED',
     copyrightDeclared: false,
 };
+(0, node_test_1.test)('publication accepts generated poster and owned custom-thumbnail keys only', () => {
+    strict_1.default.equal((0, storage_service_1.isValidProcessedThumbnailKey)(VIDEO_ID, `processing/${VIDEO_ID}/poster.jpg`), true);
+    strict_1.default.equal((0, storage_service_1.isValidProcessedThumbnailKey)(VIDEO_ID, `processing/${VIDEO_ID}/custom-thumbnail-66666666-6666-4666-8666-666666666666.webp`), true);
+    strict_1.default.equal((0, storage_service_1.isValidProcessedThumbnailKey)(VIDEO_ID, `processing/${VIDEO_ID}/other.jpg`), false);
+    strict_1.default.equal((0, storage_service_1.isValidProcessedThumbnailKey)(VIDEO_ID, 'processing/another-video/poster.jpg'), false);
+});
 let activeServers = [];
 async function createHarness() {
     const video = {
         id: VIDEO_ID,
+        isShort: false,
         channelId: CHANNEL_ID,
         rawStorageKey: RAW_KEY,
         processingAttempts: 0,
@@ -66,14 +74,18 @@ async function createHarness() {
         listFails: false,
         listDatabaseUnavailable: false,
         storageFails: false,
+        storageError: null,
         blockingClaim: false,
         metadataUpdates: 0,
         thumbnailFails: false,
+        thumbnailIsShort: [],
         publishedAssetsDeleted: 0,
         publicPromotions: 0,
+        publishedAssetsPersisted: 0,
     };
     const authenticate = (req, res, next) => {
-        const userId = req.get('x-test-user');
+        const userId = req.get('x-test-user')
+            ?? req.get('authorization')?.replace(/^Bearer /i, '');
         if (!userId) {
             res.status(401).json({ error: 'Unauthorized' });
             return;
@@ -90,10 +102,14 @@ async function createHarness() {
                 Object.assign(video, data, { status: 'DRAFT', rawStorageKey: null });
                 return { id: VIDEO_ID };
             },
-            updateMetadata: async ({ userId, metadata }) => {
+            updateMetadata: async ({ userId, metadata, publishedAssets }) => {
                 if (userId !== USER_ID)
                     return false;
                 calls.metadataUpdates += 1;
+                if (publishedAssets) {
+                    calls.publishedAssetsPersisted += 1;
+                    video.thumbnailUrl = publishedAssets.thumbnailUrl;
+                }
                 const wasDeclared = video.copyrightDeclared;
                 Object.assign(video, metadata, { copyrightDeclared: wasDeclared || metadata.copyrightDeclared });
                 if (metadata.copyrightDeclared && !video.copyrightDeclaredAt) {
@@ -163,8 +179,9 @@ async function createHarness() {
         },
         storage: {
             createUploadUrl: async (userId, contentType, fileSize, key) => {
-                if (calls.storageFails)
-                    throw new Error('storage credentials must not be returned');
+                if (calls.storageFails) {
+                    throw calls.storageError ?? new Error('storage credentials must not be returned');
+                }
                 calls.uploadUrls.push({ userId, contentType, fileSize, key });
                 return { uploadUrl: 'https://upload.example/presigned', fileKey: key || RAW_KEY };
             },
@@ -183,7 +200,10 @@ async function createHarness() {
                     expiresIn: 900,
                 };
             },
-            normalizeThumbnail: async () => !calls.thumbnailFails,
+            normalizeThumbnail: async (_key, _contentType, _fileSize, isShort) => {
+                calls.thumbnailIsShort.push(isShort);
+                return !calls.thumbnailFails;
+            },
             publishAssets: async () => {
                 calls.publicPromotions += 1;
                 return {
@@ -195,7 +215,7 @@ async function createHarness() {
         },
         queue: {
             add: async (_name, data, options) => {
-                calls.queueJobs.push({ jobId: options.jobId, data });
+                calls.queueJobs.push({ jobId: options.jobId, data, options });
                 if (calls.queueFails)
                     throw new Error('test queue failure');
             },
@@ -205,6 +225,14 @@ async function createHarness() {
     const app = (0, express_1.default)();
     app.use(express_1.default.json());
     app.use('/api/v1', (0, video_upload_route_1.createVideoUploadRouter)(dependencies));
+    app.get('/api/v1/videos/:id([0-9a-fA-F-]+)', (req, res) => {
+        const isPublic = video.status === 'PUBLISHED' && video.visibility !== 'PRIVATE';
+        if (!isPublic || req.params.id !== video.id) {
+            res.status(404).json({ error: 'Video not found or not available' });
+            return;
+        }
+        res.status(200).json({ id: video.id, title: video.title });
+    });
     const server = (0, node_http_1.createServer)(app);
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     activeServers.push(server);
@@ -252,6 +280,27 @@ async function patch(baseUrl, path, body, userId = USER_ID) {
     strict_1.default.equal(malformed.status, 400);
     strict_1.default.equal(harness.calls.created, 0);
 });
+(0, node_test_1.test)('public watch reads fall through to the public API while owner metadata stays private', async () => {
+    const harness = await createHarness();
+    const path = `/api/v1/videos/${VIDEO_ID}`;
+    const privateResponse = await fetch(`${harness.baseUrl}${path}`);
+    strict_1.default.equal(privateResponse.status, 404);
+    harness.video.status = 'PUBLISHED';
+    harness.video.visibility = 'PUBLIC';
+    const publicResponse = await fetch(`${harness.baseUrl}${path}`);
+    strict_1.default.equal(publicResponse.status, 200);
+    strict_1.default.deepEqual(await publicResponse.json(), { id: VIDEO_ID, title: 'Test video' });
+    harness.video.visibility = 'PRIVATE';
+    const notOwnerResponse = await fetch(`${harness.baseUrl}${path}`, {
+        headers: { authorization: `Bearer ${OTHER_USER_ID}` },
+    });
+    strict_1.default.equal(notOwnerResponse.status, 404);
+    const ownerResponse = await fetch(`${harness.baseUrl}${path}`, {
+        headers: { authorization: `Bearer ${USER_ID}` },
+    });
+    strict_1.default.equal(ownerResponse.status, 200);
+    strict_1.default.equal((await ownerResponse.json()).videoId, VIDEO_ID);
+});
 (0, node_test_1.test)('draft creation rejects channels not owned by the authenticated user', async () => {
     const harness = await createHarness();
     harness.calls.ownsChannel = false;
@@ -297,7 +346,7 @@ async function patch(baseUrl, path, body, userId = USER_ID) {
     strict_1.default.equal(harness.video.copyrightDeclaredById, USER_ID);
     strict_1.default.ok(harness.video.copyrightDeclaredAt instanceof Date);
     const reloaded = await fetch(`${harness.baseUrl}${path}`, {
-        headers: { 'x-test-user': USER_ID },
+        headers: { authorization: `Bearer ${USER_ID}` },
     });
     strict_1.default.equal(reloaded.status, 200);
     const metadata = await reloaded.json();
@@ -305,6 +354,48 @@ async function patch(baseUrl, path, body, userId = USER_ID) {
     strict_1.default.equal(metadata.description, 'Updated description');
     strict_1.default.deepEqual(metadata.tags, ['tag one', 'tag two']);
     strict_1.default.equal(harness.calls.metadataUpdates, 1);
+});
+(0, node_test_1.test)('changing a published private video to public promotes and persists its playable assets', async () => {
+    const harness = await createHarness();
+    harness.video.status = 'PUBLISHED';
+    harness.video.visibility = 'PRIVATE';
+    harness.video.thumbnailStorageKey = `processing/${VIDEO_ID}/poster.jpg`;
+    harness.video.copyrightDeclared = true;
+    harness.video.copyrightDeclaredAt = new Date();
+    harness.video.copyrightDeclaredById = USER_ID;
+    const response = await fetch(`${harness.baseUrl}/api/v1/videos/${VIDEO_ID}`, {
+        method: 'PATCH',
+        headers: {
+            'content-type': 'application/json',
+            'x-test-user': USER_ID,
+        },
+        body: JSON.stringify({ ...VALID_METADATA, visibility: 'PUBLIC' }),
+    });
+    strict_1.default.equal(response.status, 200);
+    strict_1.default.equal(harness.video.visibility, 'PUBLIC');
+    strict_1.default.equal(harness.calls.publicPromotions, 1);
+    strict_1.default.equal(harness.calls.publishedAssetsPersisted, 1);
+    strict_1.default.equal(harness.video.thumbnailUrl, 'https://media.example/video-thumb.webp');
+});
+(0, node_test_1.test)('changing a published private video to public remains blocked by a verified claim', async () => {
+    const harness = await createHarness();
+    harness.video.status = 'PUBLISHED';
+    harness.video.visibility = 'PRIVATE';
+    harness.video.copyrightDeclared = true;
+    harness.video.copyrightDeclaredAt = new Date();
+    harness.video.copyrightDeclaredById = USER_ID;
+    harness.calls.blockingClaim = true;
+    const response = await fetch(`${harness.baseUrl}/api/v1/videos/${VIDEO_ID}`, {
+        method: 'PATCH',
+        headers: {
+            'content-type': 'application/json',
+            'x-test-user': USER_ID,
+        },
+        body: JSON.stringify({ ...VALID_METADATA, visibility: 'PUBLIC' }),
+    });
+    strict_1.default.equal(response.status, 409);
+    strict_1.default.equal(harness.video.visibility, 'PRIVATE');
+    strict_1.default.equal(harness.calls.publicPromotions, 0);
 });
 (0, node_test_1.test)('upload intent reports unavailable storage without creating another video', async () => {
     const harness = await createHarness();
@@ -315,8 +406,28 @@ async function patch(baseUrl, path, body, userId = USER_ID) {
         videoId: VIDEO_ID, contentType: 'video/mp4', fileSize: 1024,
     });
     strict_1.default.equal(response.status, 503);
+    const body = await response.json();
+    strict_1.default.equal(body.code, 'STORAGE_TEMPORARY');
     strict_1.default.equal(harness.calls.created, 0);
-    strict_1.default.doesNotMatch(JSON.stringify(await response.json()), /credentials/);
+    strict_1.default.doesNotMatch(JSON.stringify(body), /credentials/);
+});
+(0, node_test_1.test)('upload intent identifies throttled storage without exposing provider details', async () => {
+    const harness = await createHarness();
+    harness.video.status = 'DRAFT';
+    harness.video.rawStorageKey = null;
+    harness.calls.storageFails = true;
+    harness.calls.storageError = Object.assign(new Error('provider response details'), {
+        name: 'SlowDown',
+        $metadata: { httpStatusCode: 503 },
+    });
+    const response = await post(harness.baseUrl, '/api/v1/videos/upload-intent', {
+        videoId: VIDEO_ID, contentType: 'video/mp4', fileSize: 1024,
+    });
+    strict_1.default.equal(response.status, 503);
+    const body = await response.json();
+    strict_1.default.equal(body.code, 'STORAGE_THROTTLED');
+    strict_1.default.match(body.error, /throttling/);
+    strict_1.default.doesNotMatch(JSON.stringify(body), /provider response details/);
 });
 (0, node_test_1.test)('a repeated upload intent cannot create another video or replace an active upload', async () => {
     const harness = await createHarness();
@@ -364,6 +475,11 @@ async function patch(baseUrl, path, body, userId = USER_ID) {
     strict_1.default.equal(retried.status, 202);
     strict_1.default.equal(harness.calls.inspection, 2);
     strict_1.default.deepEqual(harness.calls.queueJobs.map((job) => job.jobId), [VIDEO_ID, VIDEO_ID]);
+    strict_1.default.deepEqual(harness.calls.queueJobs[0].options, {
+        jobId: VIDEO_ID,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 1000 },
+    });
 });
 (0, node_test_1.test)('verification does not mark a video processing while Redis is unavailable', async () => {
     const harness = await createHarness();
@@ -381,6 +497,39 @@ async function patch(baseUrl, path, body, userId = USER_ID) {
     strict_1.default.equal(response.status, 202);
     strict_1.default.equal(harness.video.status, 'PROCESSING');
     strict_1.default.equal(harness.calls.queueJobs[0].jobId, `${VIDEO_ID}-retry-2`);
+});
+(0, node_test_1.test)('Short upload intents reject invalid duration, aspect ratio, and oversized files', async () => {
+    const harness = await createHarness();
+    harness.video.status = 'DRAFT';
+    harness.video.rawStorageKey = null;
+    harness.video.isShort = true;
+    const tooLong = await post(harness.baseUrl, '/api/v1/videos/upload-intent', {
+        videoId: VIDEO_ID,
+        contentType: 'video/mp4',
+        fileSize: 1024,
+        duration: 181,
+        width: 1080,
+        height: 1920,
+    });
+    strict_1.default.equal(tooLong.status, 400);
+    const wrongAspect = await post(harness.baseUrl, '/api/v1/videos/upload-intent', {
+        videoId: VIDEO_ID,
+        contentType: 'video/mp4',
+        fileSize: 1024,
+        duration: 60,
+        width: 1920,
+        height: 1080,
+    });
+    strict_1.default.equal(wrongAspect.status, 400);
+    const valid = await post(harness.baseUrl, '/api/v1/videos/upload-intent', {
+        videoId: VIDEO_ID,
+        contentType: 'video/mp4',
+        fileSize: 1024,
+        duration: 60,
+        width: 1080,
+        height: 1920,
+    });
+    strict_1.default.equal(valid.status, 201);
 });
 (0, node_test_1.test)('verification rejects oversized or disallowed uploaded object metadata', async () => {
     const harness = await createHarness();
@@ -424,6 +573,7 @@ async function patch(baseUrl, path, body, userId = USER_ID) {
 });
 (0, node_test_1.test)('thumbnail upload is owner-scoped and requires successful server-side validation', async () => {
     const harness = await createHarness();
+    harness.video.isShort = true;
     const path = `/api/v1/videos/${VIDEO_ID}/thumbnail-upload-intent`;
     const body = { contentType: 'image/png', fileSize: 4096 };
     const denied = await post(harness.baseUrl, path, body, OTHER_USER_ID);
@@ -441,6 +591,7 @@ async function patch(baseUrl, path, body, userId = USER_ID) {
     strict_1.default.equal(confirmed.status, 200);
     strict_1.default.equal(harness.video.thumbnailStorageKey, expectedKey);
     strict_1.default.equal(harness.video.pendingThumbnailStorageKey, null);
+    strict_1.default.deepEqual(harness.calls.thumbnailIsShort, [true, true]);
 });
 (0, node_test_1.test)('publication requires declaration and is blocked by a verified copyright claim', async () => {
     const harness = await createHarness();
@@ -516,4 +667,23 @@ async function patch(baseUrl, path, body, userId = USER_ID) {
     });
     strict_1.default.equal(rejected.status, 403);
     strict_1.default.equal(rejected.headers.get('access-control-allow-origin'), null);
+});
+(0, node_test_1.test)('verify-upload enforces Short file size limits and safely increments jobId on retry after FAILED', async () => {
+    const harness = await createHarness();
+    harness.video.isShort = true;
+    harness.video.status = 'FAILED';
+    harness.video.processingAttempts = 1;
+    harness.video.uploadFileSize = BigInt(1024);
+    // Oversized uploaded object on Short fails 400
+    harness.calls.objectContentLength = 1024 * 1024 * 1024 + 1;
+    const oversizedRes = await post(harness.baseUrl, `/api/v1/videos/${VIDEO_ID}/verify-upload`);
+    strict_1.default.equal(oversizedRes.status, 400);
+    strict_1.default.equal(harness.calls.queueJobs.length, 0);
+    // Matching size transitions FAILED -> UPLOADED -> PROCESSING and uses retry jobId
+    harness.calls.objectContentLength = 1024;
+    const retryRes = await post(harness.baseUrl, `/api/v1/videos/${VIDEO_ID}/verify-upload`);
+    strict_1.default.equal(retryRes.status, 202);
+    strict_1.default.equal(harness.video.status, 'PROCESSING');
+    strict_1.default.equal(harness.calls.queueJobs.length, 1);
+    strict_1.default.equal(harness.calls.queueJobs[0].jobId, `${VIDEO_ID}-retry-2`);
 });

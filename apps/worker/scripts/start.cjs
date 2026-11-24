@@ -7,16 +7,15 @@ function loadEnvFile(filePath) {
 }
 
 const packageEnv = path.resolve(__dirname, '../.env');
-const rootEnv = path.resolve(__dirname, '../../../.env');
 try {
   loadEnvFile(packageEnv);
 } catch (error) {
   if (error.code !== 'ENOENT') throw error;
 }
-try {
-  loadEnvFile(rootEnv);
-} catch (error) {
-  if (error.code !== 'ENOENT') throw error;
+if (process.env.WATCHTUBE_DATABASE_URL) {
+  process.env.DATABASE_URL = process.env.WATCHTUBE_DATABASE_URL;
+  delete process.env.DATABASE_URL_UNPOOLED;
+  delete process.env.WATCHTUBE_DIRECT_URL;
 }
 
 require('../dist/worker.js').startWorker();

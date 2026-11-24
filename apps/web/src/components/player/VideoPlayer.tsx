@@ -1,14 +1,34 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import { Play, Pause, Volume2, VolumeX, Maximize, Settings, SignalLow, LoaderCircle } from 'lucide-react';
+import { apiClient } from '../../api/apiClient';
 
 interface VideoPlayerProps {
   src: string; // The master.m3u8 URL
   initialPosition?: number;
   onProgress?: (currentTime: number, duration: number, completed: boolean) => void;
+  videoId?: string;
+  viewerSessionId?: string;
 }
 
-export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, initialPosition = 0, onProgress }) => {
+interface AdState {
+  isServing: boolean;
+  adMediaUrl?: string;
+  adDurationSeconds: number;
+  remainingSeconds: number;
+  canSkip: boolean;
+  adToken?: string;
+  sessionId?: string;
+  provider?: string;
+}
+
+export const VideoPlayer: React.FC<VideoPlayerProps> = ({
+  src,
+  initialPosition = 0,
+  onProgress,
+  videoId,
+  viewerSessionId,
+}) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -29,7 +49,116 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, initialPosition =
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [playbackAttempt, setPlaybackAttempt] = useState(0);
   const [seekableKey, setSeekableKey] = useState<string | null>(null);
+  const [adState, setAdState] = useState<AdState | null>(null);
   const playbackKey = `${src}:${playbackAttempt}`;
+
+  const finishAd = () => {
+    if (adState?.adToken) {
+      void apiClient.post('/api/v1/monetization/event', {
+        eventType: 'COMPLETE',
+        adToken: adState.adToken,
+        sessionId: adState.sessionId,
+      }).catch(() => undefined);
+    }
+    setAdState(null);
+  };
+
+  const skipAd = () => {
+    if (adState?.adToken) {
+      void apiClient.post('/api/v1/monetization/event', {
+        eventType: 'SKIP',
+        adToken: adState.adToken,
+        sessionId: adState.sessionId,
+      }).catch(() => undefined);
+    }
+    setAdState(null);
+  };
+
+  const failOpenAd = () => {
+    if (adState?.adToken) {
+      void apiClient.post('/api/v1/monetization/event', {
+        eventType: 'ERROR',
+        adToken: adState.adToken,
+        sessionId: adState.sessionId,
+      }).catch(() => undefined);
+    }
+    setAdState(null);
+  };
+
+  useEffect(() => {
+    if (!videoId) return;
+    let didCancel = false;
+    const timeout = setTimeout(() => {
+      if (!didCancel) setAdState(null);
+    }, 2000);
+
+    apiClient.post<{
+      decision: string;
+      adMediaUrl?: string;
+      adDurationSeconds?: number;
+      skipOffsetSeconds?: number;
+      adToken?: string;
+      sessionId?: string;
+      provider?: string;
+    }>('/api/v1/monetization/decision', {
+      placement: 'PRE_ROLL',
+      videoId,
+      viewerSessionId,
+    })
+      .then(({ data }) => {
+        clearTimeout(timeout);
+        if (didCancel) return;
+        if (data.decision === 'SERVE' && data.adMediaUrl) {
+          const durationSec = data.adDurationSeconds || 15;
+          setAdState({
+            isServing: true,
+            adMediaUrl: data.adMediaUrl,
+            adDurationSeconds: durationSec,
+            remainingSeconds: durationSec,
+            canSkip: (data.skipOffsetSeconds || 5) <= 0,
+            adToken: data.adToken,
+            sessionId: data.sessionId,
+            provider: data.provider,
+          });
+          void apiClient.post('/api/v1/monetization/event', {
+            eventType: 'IMPRESSION',
+            adToken: data.adToken,
+            sessionId: data.sessionId,
+          }).catch(() => undefined);
+        } else {
+          setAdState(null);
+        }
+      })
+      .catch(() => {
+        clearTimeout(timeout);
+        if (!didCancel) setAdState(null);
+      });
+
+    return () => {
+      didCancel = true;
+      clearTimeout(timeout);
+    };
+  }, [videoId, viewerSessionId]);
+
+  useEffect(() => {
+    if (!adState?.isServing) return;
+    const interval = setInterval(() => {
+      setAdState((current) => {
+        if (!current || !current.isServing) return null;
+        const nextRemaining = current.remainingSeconds - 1;
+        if (nextRemaining <= 0) {
+          finishAd();
+          return null;
+        }
+        return {
+          ...current,
+          remainingSeconds: nextRemaining,
+          canSkip: current.canSkip || nextRemaining <= Math.max(0, current.adDurationSeconds - 5),
+        };
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [adState?.isServing]);
 
   const formatTime = (time: number) => {
     if (!Number.isFinite(time)) return '00:00';
@@ -271,6 +400,39 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, initialPosition =
         onEnded={() => setIsPlaying(false)}
         muted={isMuted}
       />
+      {adState?.isServing && (
+        <div className="absolute inset-0 z-30 flex flex-col justify-between bg-black text-white">
+          {adState.adMediaUrl ? (
+            <video
+              src={adState.adMediaUrl}
+              autoPlay
+              playsInline
+              className="h-full w-full object-contain"
+              onEnded={finishAd}
+              onError={failOpenAd}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center text-sm text-white/70">
+              Advertisement ({adState.remainingSeconds}s)
+            </div>
+          )}
+          <div className="absolute bottom-4 right-4 flex items-center gap-3">
+            <span className="rounded bg-black/80 px-2.5 py-1 text-xs font-semibold text-white">
+              Ad · {adState.remainingSeconds}s
+            </span>
+            {adState.canSkip && (
+              <button
+                type="button"
+                onClick={skipAd}
+                className="rounded-control bg-white/20 px-4 py-1.5 text-xs font-bold text-white backdrop-blur hover:bg-white/30"
+              >
+                Skip Ad
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {isBuffering && !playbackError && (
         <div role="status" aria-live="polite" className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-2 bg-black/35 text-sm text-white">
           <LoaderCircle aria-hidden="true" className="h-5 w-5 animate-spin" />

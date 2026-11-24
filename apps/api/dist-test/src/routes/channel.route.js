@@ -48,6 +48,10 @@ function createChannelRouter(dependencies) {
             return;
         }
         try {
+            if (typeof dependencies.repository.hasUserChannel === 'function' && await dependencies.repository.hasUserChannel(userId)) {
+                res.status(409).json({ error: 'Each account may only have one channel.' });
+                return;
+            }
             if (await dependencies.repository.handleExists(parsed.data.handle)) {
                 res.status(409).json({ error: 'Handle already in use.' });
                 return;
@@ -60,6 +64,12 @@ function createChannelRouter(dependencies) {
         }
         catch (error) {
             if (isUniqueConstraintError(error)) {
+                const metaTarget = error?.meta?.target;
+                if ((Array.isArray(metaTarget) && metaTarget.includes('userId')) ||
+                    (typeof metaTarget === 'string' && metaTarget.includes('userId'))) {
+                    res.status(409).json({ error: 'Each account may only have one channel.' });
+                    return;
+                }
                 res.status(409).json({ error: 'Handle already in use.' });
                 return;
             }

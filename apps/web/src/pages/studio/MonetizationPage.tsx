@@ -159,9 +159,9 @@ export function MonetizationPage() {
           <div className="flex items-start gap-4">
             <CircleDollarSign aria-hidden="true" className="h-8 w-8 shrink-0 text-green-700 dark:text-green-400" />
             <div>
-              <h2 className="text-lg font-bold text-green-900 dark:text-green-300">Advertising eligibility approved</h2>
+              <h2 className="text-lg font-bold text-green-900 dark:text-green-300">Partner Program Approved</h2>
               <p className="mt-1 text-sm text-green-800 dark:text-green-200">
-                This channel has administrator approval. No verified advertising revenue or payout provider is currently available.
+                This channel is approved for the WatchTube Partner Program.
               </p>
             </div>
           </div>
@@ -204,11 +204,9 @@ export function MonetizationPage() {
       )}
 
       <section className="rounded-card border border-border bg-surface-light p-5 dark:bg-surface-dark sm:p-6">
-        <h2 className="font-semibold">Revenue reporting is unavailable</h2>
+        <h2 className="font-semibold">Program Information</h2>
         <p className="mt-2 text-sm text-text-muted">
-          The planned revenue split is 50% WatchTube / 50% creator, but no verified ad-provider allocation or payment integration is active.
-          Gross revenue, earnings, balances, adjustments, and payouts will not be estimated or displayed until those systems are verified.
-          Provider fees, invalid-traffic deductions, payout terms, and tax treatment also require documented decisions.
+          WatchTube Partner Program membership unlocks monetization and creator support benefits. Detailed statements and reports will be accessible once monetization features are enabled for your channel.
         </p>
       </section>
     </section>
